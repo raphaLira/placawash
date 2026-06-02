@@ -1,87 +1,33 @@
-const { URL } = require('url');
-
-// Handler original Netlify
-/**
- * Netlify Function — historico
- * GET  → lista todos os veículos salvos (com paginação)
- * DELETE ?placa=ABC1234 → remove um veículo do cache
- */
-
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const sbH = (extra={}) => ({ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, 'Content-Type':'application/json', ...extra });
 
-exports.handler = async (event) => {
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Content-Type': 'application/json',
-  };
-
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
-
-  if (!SUPABASE_URL || !SUPABASE_KEY) {
-    return { statusCode: 503, headers, body: JSON.stringify({ erro: true, msg: 'Banco não configurado.' }) };
-  }
-
-  // ── LIST ──────────────────────────────────────────────────────────────────
-  if (event.httpMethod === 'GET') {
-    const page  = parseInt(event.queryStringParameters?.page  || '1');
-    const limit = parseInt(event.queryStringParameters?.limit || '50');
-    const from  = (page - 1) * limit;
-    const to    = from + limit - 1;
-
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/veiculos?order=consultado_em.desc&offset=${from}&limit=${limit}`,
-      {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-          Prefer: 'count=exact',
-        },
-      }
-    );
-
-    const total = res.headers.get('content-range')?.split('/')[1] || '?';
-    const rows  = await res.json();
-    return { statusCode: 200, headers, body: JSON.stringify({ total, rows }) };
-  }
-
-  // ── DELETE ────────────────────────────────────────────────────────────────
-  if (event.httpMethod === 'DELETE') {
-    const placa = (event.queryStringParameters?.placa || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
-    if (!placa) return { statusCode: 400, headers, body: JSON.stringify({ erro: true, msg: 'Placa ausente.' }) };
-
-    await fetch(`${SUPABASE_URL}/rest/v1/veiculos?placa=eq.${placa}`, {
-      method: 'DELETE',
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
-    });
-
-    return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
-  }
-
-  return { statusCode: 405, headers, body: JSON.stringify({ erro: true, msg: 'Método não permitido.' }) };
-};
-
-
-// Adaptador Vercel
 module.exports = async (req, res) => {
-  // Monta evento no formato Netlify
-  const event = {
-    httpMethod: req.method,
-    queryStringParameters: Object.fromEntries(
-      new URL(req.url, 'http://localhost').searchParams.entries()
-    ),
-    headers: req.headers,
-    body: await new Promise(resolve => {
-      let data = '';
-      req.on('data', chunk => data += chunk);
-      req.on('end', () => resolve(data || null));
-    }),
-  };
+  res.setHeader('Access-Control-Allow-Origin','*');
+  res.setHeader('Content-Type','application/json');
+  if (req.method==='OPTIONS') return res.status(200).end();
 
-  const result = await exports.handler(event);
+  if (req.method==='GET') {
+    const page  = parseInt(req.query?.page||'1');
+    const limit = parseInt(req.query?.limit||'100');
+    const offset= (page-1)*limit;
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/veiculos?order=consultado_em.desc&limit=${limit}&offset=${offset}`,
+      { headers:sbH({Prefer:'count=exact'}) }
+    );
+    const rows  = await r.json();
+    const total = r.headers.get('content-range')?.split('/')[1]||'0';
+    return res.status(200).json({rows:rows||[], total:Number(total), page});
+  }
 
-  // Aplica headers
-  Object.entries(result.headers || {}).forEach(([k, v]) => res.setHeader(k, v));
-  res.status(result.statusCode || 200).send(result.body || '');
+  if (req.method==='DELETE') {
+    const placa = (req.query?.placa||'').replace(/[^A-Z0-9]/gi,'').toUpperCase();
+    if (!placa) return res.status(400).json({erro:true,msg:'placa obrigatória.'});
+    await fetch(`${SUPABASE_URL}/rest/v1/veiculos?placa=eq.${placa}`, {
+      method:'DELETE', headers:sbH({Prefer:'return=minimal'}),
+    });
+    return res.status(200).json({ok:true});
+  }
+
+  return res.status(405).end();
 };
