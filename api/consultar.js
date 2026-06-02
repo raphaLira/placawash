@@ -1,16 +1,5 @@
 const { URL } = require('url');
 
-// Handler original Netlify
-/**
- * Netlify Function — consultar
- * Fluxo:
- *  1. Placa no cache?
- *     a. SIM → verifica se categoria ainda é válida (compara com sub_segmento atual)
- *              Se mudou → atualiza cache e retorna nova categoria
- *              Se não mudou → retorna cache direto
- *     b. NÃO → consulta API, determina categoria, salva e retorna
- */
-
 const TOKEN        = '5275830624180eb26cb17bfadbc7ec8c';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
@@ -21,83 +10,55 @@ const sbH = () => ({
   'Content-Type': 'application/json',
 });
 
-async function getCachedPlaca(placa) {
-  const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/veiculos?placa=eq.${placa}&limit=1`,
-    { headers: sbH() }
-  );
-  const rows = await r.json();
-  return rows?.[0] || null;
-}
+// Busca categoria pelo modelo na tabela
+// Tabela modelos tem: "HYUNDAI/CRETA 16A ATTITU"
+// API retorna MARCA="HYUNDAI" e MODELO="CRETA 16A ATTITU"
+// Então monta "HYUNDAI/CRETA 16A ATTITU" e busca com ILIKE
+async function buscarCategoria(marca, modelo) {
+  if (!marca && !modelo) return null;
 
-// Busca a categoria atual do sub-segmento (pode ter mudado desde que foi cacheado)
-async function getCategoriaAtualDoSubSeg(subSegId) {
-  if (!subSegId) return null;
-  const r = await fetch(
-    `${SUPABASE_URL}/rest/v1/sub_segmentos?id=eq.${subSegId}&select=categoria_id&limit=1`,
-    { headers: sbH() }
-  );
-  const rows = await r.json();
-  return rows?.[0]?.categoria_id || null;
-}
+  // Monta o padrão de busca: MARCA/MODELO
+  const chave = `${marca}/${modelo}`.toUpperCase();
+  
+  // Busca na tabela modelos usando ILIKE para ser tolerante
+  // Pega o primeiro resultado que casar
+  const url = `${SUPABASE_URL}/rest/v1/modelos`
+    + `?modelo=ilike.${encodeURIComponent(chave)}%`
+    + `&select=modelo,fk_sub_segmento,sub_segmentos(id,nome,categoria_id)`
+    + `&limit=1`;
 
-async function getCategoriaByModelo(modelo, marca) {
-  if (!modelo) return null;
+  const r = await fetch(url, { headers: sbH() });
+  const d = await r.json();
 
-  // Formato real na tabela: "HYUNDAI/CRETA 16A ATTITU"
-  // API retorna modelo: "CRETA 16A ATTITU" e marca: "HYUNDAI"
-  // Então montamos: MARCA + "/" + MODELO para busca exata
-
-  const M  = modelo.toUpperCase().trim();
-  const MK = (marca||'').toUpperCase().trim();
-
-  const select = 'select=fk_sub_segmento,sub_segmentos(id,nome,categoria_id)';
-
-  // Busca com join de marca+modelo (formato exato da tabela)
-  const buscas = [
-    // 1. MARCA/MODELO exato — ex: "HYUNDAI/CRETA 16A ATTITU"
-    MK ? `${SUPABASE_URL}/rest/v1/modelos?modelo=eq.${encodeURIComponent(MK+'/'+M)}&${select}&limit=1` : null,
-    // 2. MARCA/MODELO* — primeiras 3 palavras
-    MK ? `${SUPABASE_URL}/rest/v1/modelos?modelo=ilike.${encodeURIComponent(MK+'/'+M.split(' ').slice(0,3).join(' '))}%25&${select}&order=id.asc&limit=1` : null,
-    // 3. MARCA/MODELO* — primeiras 2 palavras
-    MK ? `${SUPABASE_URL}/rest/v1/modelos?modelo=ilike.${encodeURIComponent(MK+'/'+M.split(' ').slice(0,2).join(' '))}%25&${select}&order=id.asc&limit=1` : null,
-    // 4. MARCA/PRIMEIRAP* — só primeira palavra do modelo
-    MK ? `${SUPABASE_URL}/rest/v1/modelos?modelo=ilike.${encodeURIComponent(MK+'/'+M.split(' ')[0])}%25&${select}&order=id.asc&limit=1` : null,
-    // 5. *MODELO exato sem marca*
-    `${SUPABASE_URL}/rest/v1/modelos?modelo=ilike.*${encodeURIComponent(M.split(' ').slice(0,2).join(' '))}*&${select}&order=id.asc&limit=1`,
-  ].filter(Boolean);
-
-  for (const url of buscas) {
-    const r = await fetch(url, { headers: sbH() });
-    const d = await r.json();
-    if (d?.[0]?.sub_segmentos?.categoria_id) {
-      console.log('[MODELO ENCONTRADO]', url);
-      return {
-        categoriaId: d[0].sub_segmentos.categoria_id,
-        subSegId:    d[0].fk_sub_segmento,
-        subSegNome:  d[0].sub_segmentos.nome,
-      };
-    }
+  if (d?.[0]?.sub_segmentos?.categoria_id) {
+    return {
+      categoriaId: d[0].sub_segmentos.categoria_id,
+      subSegId:    d[0].fk_sub_segmento,
+      subSegNome:  d[0].sub_segmentos.nome,
+    };
   }
 
-  console.log('[MODELO NAO ENCONTRADO]', MK, M);
+  // Se não achou com modelo completo, tenta só MARCA/PRIMEIRAP
+  const primeiraP = modelo.toUpperCase().split(' ')[0];
+  const chave2 = `${marca}/${primeiraP}`.toUpperCase();
+
+  const url2 = `${SUPABASE_URL}/rest/v1/modelos`
+    + `?modelo=ilike.${encodeURIComponent(chave2)}%`
+    + `&select=modelo,fk_sub_segmento,sub_segmentos(id,nome,categoria_id)`
+    + `&limit=1`;
+
+  const r2 = await fetch(url2, { headers: sbH() });
+  const d2 = await r2.json();
+
+  if (d2?.[0]?.sub_segmentos?.categoria_id) {
+    return {
+      categoriaId: d2[0].sub_segmentos.categoria_id,
+      subSegId:    d2[0].fk_sub_segmento,
+      subSegNome:  d2[0].sub_segmentos.nome,
+    };
+  }
+
   return null;
-}
-
-async function upsertVeiculo(row) {
-  await fetch(`${SUPABASE_URL}/rest/v1/veiculos`, {
-    method:  'POST',
-    headers: { ...sbH(), Prefer: 'resolution=merge-duplicates' },
-    body:    JSON.stringify(row),
-  });
-}
-
-async function patchVeiculo(placa, dados) {
-  await fetch(`${SUPABASE_URL}/rest/v1/veiculos?placa=eq.${placa}`, {
-    method:  'PATCH',
-    headers: { ...sbH(), Prefer: 'return=minimal' },
-    body:    JSON.stringify(dados),
-  });
 }
 
 exports.handler = async (event) => {
@@ -108,134 +69,135 @@ exports.handler = async (event) => {
   };
   if (event.httpMethod === 'OPTIONS') return { statusCode:200, headers, body:'' };
 
+  // Parse da placa
   let placa;
-  if (event.httpMethod === 'GET') {
+  try {
+    placa = (JSON.parse(event.body||'{}').placa||'').replace(/[^A-Z0-9]/gi,'').toUpperCase();
+  } catch {
     placa = (event.queryStringParameters?.placa||'').replace(/[^A-Z0-9]/gi,'').toUpperCase();
-  } else {
-    try { placa = (JSON.parse(event.body||'{}').placa||'').replace(/[^A-Z0-9]/gi,'').toUpperCase(); }
-    catch { return { statusCode:400, headers, body: JSON.stringify({erro:true,msg:'Body inválido.'}) }; }
   }
 
-  if (!placa||(!/^[A-Z]{3}\d{4}$/.test(placa)&&!/^[A-Z]{3}\d[A-Z]\d{2}$/.test(placa)))
-    return { statusCode:400, headers, body: JSON.stringify({erro:true,msg:'Placa inválida.'}) };
+  if (!placa || (!/^[A-Z]{3}\d{4}$/.test(placa) && !/^[A-Z]{3}\d[A-Z]\d{2}$/.test(placa)))
+    return { statusCode:400, headers, body: JSON.stringify({erro:true, msg:'Placa inválida.'}) };
 
-  // ── 1. Verifica cache ──────────────────────────────────────────────────────
+  // 1. Verifica cache no banco
   if (SUPABASE_URL && SUPABASE_KEY) {
-    try {
-      const cached = await getCachedPlaca(placa);
-      if (cached) {
-        let categoriaId     = cached.categoria_id;
-        let categoriaManual = cached.categoria_manual;
+    const rc = await fetch(
+      `${SUPABASE_URL}/rest/v1/veiculos?placa=eq.${placa}&limit=1`,
+      { headers: sbH() }
+    );
+    const cached = await rc.json();
 
-        // Se não foi corrigida manualmente, verifica se a categoria do sub-segmento mudou
-        if (!categoriaManual && cached.fk_sub_segmento) {
-          const catAtual = await getCategoriaAtualDoSubSeg(cached.fk_sub_segmento);
-          if (catAtual && catAtual !== categoriaId) {
-            // Categoria mudou — atualiza o cache silenciosamente
-            console.log(`[CACHE UPDATE] ${placa}: ${categoriaId} → ${catAtual}`);
-            categoriaId = catAtual;
-            patchVeiculo(placa, { categoria_id: catAtual, consultado_em: new Date().toISOString() }).catch(console.warn);
-          } else {
-            // Só incrementa visita
-            patchVeiculo(placa, { consultado_em: new Date().toISOString() }).catch(console.warn);
-          }
-        }
+    if (cached?.[0]) {
+      const c = cached[0];
+      let catId = c.categoria_id;
 
-        console.log(`[CACHE HIT] ${placa} | cat=${categoriaId} | manual=${categoriaManual}`);
-        return {
-          statusCode: 200, headers,
-          body: JSON.stringify({
-            ...cached.dados,
-            _cache:           true,
-            _categoriaId:     categoriaId,
-            _categoriaManual: categoriaManual,
-            _consultadoEm:    cached.consultado_em,
-            _subSegNome:      cached.sub_seg_nome || null,
-          }),
-        };
+      // Se não foi corrigido manualmente, sempre verifica a categoria atual do sub-segmento
+      if (!c.categoria_manual && c.fk_sub_segmento) {
+        const rs = await fetch(
+          `${SUPABASE_URL}/rest/v1/sub_segmentos?id=eq.${c.fk_sub_segmento}&select=categoria_id&limit=1`,
+          { headers: sbH() }
+        );
+        const sub = await rs.json();
+        const catAtual = sub?.[0]?.categoria_id;
+        if (catAtual) catId = catAtual; // usa sempre a categoria atual do sub-segmento
       }
-    } catch(e) { console.warn('[cache]', e.message); }
+
+      // Atualiza consultado_em em background
+      fetch(`${SUPABASE_URL}/rest/v1/veiculos?placa=eq.${placa}`, {
+        method:'PATCH', headers:{...sbH(),Prefer:'return=minimal'},
+        body: JSON.stringify({consultado_em: new Date().toISOString()}),
+      }).catch(()=>{});
+
+      return {
+        statusCode:200, headers,
+        body: JSON.stringify({
+          ...c.dados,
+          _cache:           true,
+          _categoriaId:     catId,
+          _categoriaManual: c.categoria_manual,
+          _consultadoEm:    c.consultado_em,
+          _subSegNome:      c.sub_seg_nome || null,
+        }),
+      };
+    }
   }
 
-  // ── 2. Consulta API externa ────────────────────────────────────────────────
+  // 2. Consulta API externa
   const url = `https://wdapi2.com.br/consulta/${placa}/${TOKEN}`;
-  console.log(`[API] ${url}`);
   let apiData;
   try {
     const res  = await fetch(url, { headers:{Accept:'application/json'}, signal:AbortSignal.timeout(10000) });
     const text = await res.text();
-    if (!res.ok) return { statusCode:res.status, headers, body: JSON.stringify({erro:true,msg:`Erro ${res.status} da API.`}) };
-    try { apiData = JSON.parse(text); } catch {
-      return { statusCode:500, headers, body: JSON.stringify({erro:true,msg:'Resposta inválida da API.'}) };
-    }
+    if (!res.ok) return { statusCode:res.status, headers, body: JSON.stringify({erro:true,msg:`Erro ${res.status}`}) };
+    apiData = JSON.parse(text);
     if (apiData.erro||apiData.error)
       return { statusCode:400, headers, body: JSON.stringify({erro:true,msg:apiData.msg||'Placa não encontrada.'}) };
-  } catch(err) {
-    return { statusCode:500, headers, body: JSON.stringify({erro:true,msg:`Erro de conexão: ${err.message}`}) };
+  } catch(e) {
+    return { statusCode:500, headers, body: JSON.stringify({erro:true,msg:`Erro: ${e.message}`}) };
   }
 
-  // ── 3. Determina categoria pelo modelo ────────────────────────────────────
-  const ex     = apiData.extra || {};
-  const modelo = apiData.MODELO || ex.modelo || '';
+  // 3. Busca categoria pelo modelo
+  const ex    = apiData.extra || {};
+  const marca = apiData.MARCA || '';
+  const modelo= apiData.MODELO || ex.modelo || '';
+
   let categoriaId = null;
   let subSegId    = null;
   let subSegNome  = null;
 
-  if (SUPABASE_URL && SUPABASE_KEY && modelo) {
-    try {
-      const mc = await getCategoriaByModelo(modelo, apiData.MARCA||'');
-      if (mc) {
-        categoriaId = mc.categoriaId;
-        subSegId    = mc.subSegId;
-        subSegNome  = mc.subSegNome || null;
-        console.log(`[MODELO] "${modelo}" → ${categoriaId} (sub=${subSegId})`);
-      }
-    } catch(e) { console.warn('[modelo]', e.message); }
+  if (marca && modelo) {
+    const mc = await buscarCategoria(marca, modelo);
+    if (mc) {
+      categoriaId = mc.categoriaId;
+      subSegId    = mc.subSegId;
+      subSegNome  = mc.subSegNome;
+    }
   }
 
-  // ── 4. Salva no banco ─────────────────────────────────────────────────────
+  // 4. Salva no banco
   if (SUPABASE_URL && SUPABASE_KEY) {
-    try {
-      await upsertVeiculo({
+    await fetch(`${SUPABASE_URL}/rest/v1/veiculos`, {
+      method:'POST',
+      headers:{...sbH(), Prefer:'resolution=merge-duplicates'},
+      body: JSON.stringify({
         placa,
-        marca:           apiData.MARCA           || '',
+        marca,
         modelo,
-        fk_sub_segmento: subSegId                || null,
-        ano:             apiData.ano             || ex.ano_fabricacao || '',
-        ano_modelo:      apiData.anoModelo        || ex.ano_modelo    || '',
-        cor:             apiData.cor             || '',
-        combustivel:     ex.combustivel          || '',
-        especie:         ex.especie              || '',
-        municipio:       ex.municipio            || '',
-        uf:              ex.uf                   || '',
-        chassi:          apiData.chassi          || '',
+        fk_sub_segmento: subSegId    || null,
+        sub_seg_nome:    subSegNome  || null,
+        ano:             apiData.ano || ex.ano_fabricacao || '',
+        ano_modelo:      apiData.anoModelo || ex.ano_modelo || '',
+        cor:             apiData.cor || '',
+        combustivel:     ex.combustivel || '',
+        especie:         ex.especie || '',
+        municipio:       ex.municipio || '',
+        uf:              ex.uf || '',
+        chassi:          apiData.chassi || '',
         codigo_situacao: String(apiData.codigoSituacao??'0'),
-        categoria_id:    categoriaId             || null,
-        sub_seg_nome:    subSegNome              || null,
+        categoria_id:    categoriaId || null,
         categoria_manual: false,
         consultas:       1,
         consultado_em:   new Date().toISOString(),
         dados:           apiData,
-      });
-    } catch(e) { console.warn('[save]', e.message); }
+      }),
+    });
   }
 
   return {
-    statusCode: 200, headers,
+    statusCode:200, headers,
     body: JSON.stringify({
       ...apiData,
       _cache:           false,
       _categoriaId:     categoriaId,
       _categoriaManual: false,
-      _subSegNome:      subSegNome || null,
+      _subSegNome:      subSegNome,
     }),
   };
 };
 
-
 // Adaptador Vercel
 module.exports = async (req, res) => {
-  // Monta evento no formato Netlify
   const event = {
     httpMethod: req.method,
     queryStringParameters: Object.fromEntries(
@@ -248,10 +210,7 @@ module.exports = async (req, res) => {
       req.on('end', () => resolve(data || null));
     }),
   };
-
   const result = await exports.handler(event);
-
-  // Aplica headers
-  Object.entries(result.headers || {}).forEach(([k, v]) => res.setHeader(k, v));
-  res.status(result.statusCode || 200).send(result.body || '');
+  Object.entries(result.headers||{}).forEach(([k,v])=>res.setHeader(k,v));
+  res.status(result.statusCode||200).send(result.body||'');
 };
