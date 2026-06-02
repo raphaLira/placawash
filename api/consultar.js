@@ -41,29 +41,46 @@ async function getCategoriaAtualDoSubSeg(subSegId) {
   return rows?.[0]?.categoria_id || null;
 }
 
-async function getCategoriaByModelo(modelo) {
+async function getCategoriaByModelo(modelo, marca) {
   if (!modelo) return null;
 
-  // Busca exata
-  const mEnc = encodeURIComponent(modelo.toUpperCase());
-  const r1 = await fetch(
-    `${SUPABASE_URL}/rest/v1/modelos?modelo=eq.${mEnc}&select=fk_sub_segmento,sub_segmentos(categoria_id)&limit=1`,
-    { headers: sbH() }
-  );
-  const d1 = await r1.json();
-  if (d1?.[0]?.sub_segmentos?.categoria_id)
-    return { categoriaId: d1[0].sub_segmentos.categoria_id, subSegId: d1[0].fk_sub_segmento };
+  // Formato real na tabela: "HYUNDAI/CRETA 16A ATTITU"
+  // API retorna modelo: "CRETA 16A ATTITU" e marca: "HYUNDAI"
+  // Então montamos: MARCA + "/" + MODELO para busca exata
 
-  // Prefixo (primeiras 3 palavras)
-  const prefix = encodeURIComponent(modelo.toUpperCase().split(' ').slice(0,3).join(' '));
-  const r2 = await fetch(
-    `${SUPABASE_URL}/rest/v1/modelos?modelo=ilike.${prefix}%25&select=fk_sub_segmento,sub_segmentos(categoria_id)&order=id.asc&limit=1`,
-    { headers: sbH() }
-  );
-  const d2 = await r2.json();
-  if (d2?.[0]?.sub_segmentos?.categoria_id)
-    return { categoriaId: d2[0].sub_segmentos.categoria_id, subSegId: d2[0].fk_sub_segmento };
+  const M  = modelo.toUpperCase().trim();
+  const MK = (marca||'').toUpperCase().trim();
 
+  const select = 'select=fk_sub_segmento,sub_segmentos(id,nome,categoria_id)';
+
+  // Busca com join de marca+modelo (formato exato da tabela)
+  const buscas = [
+    // 1. MARCA/MODELO exato — ex: "HYUNDAI/CRETA 16A ATTITU"
+    MK ? `${SUPABASE_URL}/rest/v1/modelos?modelo=eq.${encodeURIComponent(MK+'/'+M)}&${select}&limit=1` : null,
+    // 2. MARCA/MODELO* — primeiras 3 palavras
+    MK ? `${SUPABASE_URL}/rest/v1/modelos?modelo=ilike.${encodeURIComponent(MK+'/'+M.split(' ').slice(0,3).join(' '))}%25&${select}&order=id.asc&limit=1` : null,
+    // 3. MARCA/MODELO* — primeiras 2 palavras
+    MK ? `${SUPABASE_URL}/rest/v1/modelos?modelo=ilike.${encodeURIComponent(MK+'/'+M.split(' ').slice(0,2).join(' '))}%25&${select}&order=id.asc&limit=1` : null,
+    // 4. MARCA/PRIMEIRAP* — só primeira palavra do modelo
+    MK ? `${SUPABASE_URL}/rest/v1/modelos?modelo=ilike.${encodeURIComponent(MK+'/'+M.split(' ')[0])}%25&${select}&order=id.asc&limit=1` : null,
+    // 5. *MODELO exato sem marca*
+    `${SUPABASE_URL}/rest/v1/modelos?modelo=ilike.*${encodeURIComponent(M.split(' ').slice(0,2).join(' '))}*&${select}&order=id.asc&limit=1`,
+  ].filter(Boolean);
+
+  for (const url of buscas) {
+    const r = await fetch(url, { headers: sbH() });
+    const d = await r.json();
+    if (d?.[0]?.sub_segmentos?.categoria_id) {
+      console.log('[MODELO ENCONTRADO]', url);
+      return {
+        categoriaId: d[0].sub_segmentos.categoria_id,
+        subSegId:    d[0].fk_sub_segmento,
+        subSegNome:  d[0].sub_segmentos.nome,
+      };
+    }
+  }
+
+  console.log('[MODELO NAO ENCONTRADO]', MK, M);
   return null;
 }
 
@@ -166,7 +183,7 @@ exports.handler = async (event) => {
 
   if (SUPABASE_URL && SUPABASE_KEY && modelo) {
     try {
-      const mc = await getCategoriaByModelo(modelo);
+      const mc = await getCategoriaByModelo(modelo, apiData.MARCA||'');
       if (mc) {
         categoriaId = mc.categoriaId;
         subSegId    = mc.subSegId;
