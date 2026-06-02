@@ -1,6 +1,5 @@
 {
   "name": "placawash",
   "version": "1.0.0",
-  "description": "PlacaWash - Lava-Jato Inteligente",
   "engines": { "node": "18.x" }
 }
