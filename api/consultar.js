@@ -8,13 +8,15 @@ const sbH = () => ({
   'Content-Type': 'application/json',
 });
 
-async function buscarCategoria(marca, modelo) {
-  if (!marca || !modelo) return null;
-  const chave = `${marca}/${modelo}`.toUpperCase();
+// Busca categoria pelo modelo completo (ex: "HYUNDAI/CRETA 16A ATTITU")
+// extra.modelo já vem no formato correto da API
+async function buscarCategoria(modeloCompleto) {
+  if (!modeloCompleto) return null;
+  const M = modeloCompleto.toUpperCase().trim();
 
-  // Busca MARCA/MODELO* (ex: HYUNDAI/CRETA 16A ATTITU)
+  // 1. Busca exata
   const r1 = await fetch(
-    `${SUPABASE_URL}/rest/v1/modelos?modelo=ilike.${encodeURIComponent(chave)}%25&select=fk_sub_segmento,sub_segmentos(id,nome,categoria_id)&limit=1`,
+    `${SUPABASE_URL}/rest/v1/modelos?modelo=eq.${encodeURIComponent(M)}&select=fk_sub_segmento,sub_segmentos(id,nome,categoria_id)&limit=1`,
     { headers: sbH() }
   );
   const d1 = await r1.json();
@@ -24,10 +26,10 @@ async function buscarCategoria(marca, modelo) {
     subSegNome:  d1[0].sub_segmentos.nome,
   };
 
-  // Busca MARCA/PRIMEIRAP* (ex: HYUNDAI/CRETA*)
-  const primP = modelo.toUpperCase().split(' ')[0];
+  // 2. Busca prefixo MARCA/PRIMEIRAP* (ex: HYUNDAI/CRETA*)
+  const prefixo = M.split(' ').slice(0,2).join(' ');
   const r2 = await fetch(
-    `${SUPABASE_URL}/rest/v1/modelos?modelo=ilike.${encodeURIComponent(marca.toUpperCase()+'/'+primP)}%25&select=fk_sub_segmento,sub_segmentos(id,nome,categoria_id)&limit=1`,
+    `${SUPABASE_URL}/rest/v1/modelos?modelo=ilike.${encodeURIComponent(prefixo)}%25&select=fk_sub_segmento,sub_segmentos(id,nome,categoria_id)&order=id.asc&limit=1`,
     { headers: sbH() }
   );
   const d2 = await r2.json();
@@ -40,22 +42,28 @@ async function buscarCategoria(marca, modelo) {
   return null;
 }
 
-// Handler Vercel (Express-style direto)
+// Busca categoria atual do sub-segmento (sempre atualizada)
+async function getCatSubSeg(subSegId) {
+  if (!subSegId) return null;
+  const r = await fetch(
+    `${SUPABASE_URL}/rest/v1/sub_segmentos?id=eq.${subSegId}&select=categoria_id,nome&limit=1`,
+    { headers: sbH() }
+  );
+  const d = await r.json();
+  return d?.[0] || null;
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Content-Type', 'application/json');
-
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  // Lê body
+  // Lê placa
   let placa = '';
   try {
-    const buf = await new Promise((resolve, reject) => {
-      let d = '';
-      req.on('data', c => d += c);
-      req.on('end',  () => resolve(d));
-      req.on('error', reject);
+    const buf = await new Promise((ok, err) => {
+      let d = ''; req.on('data', c => d += c); req.on('end', () => ok(d)); req.on('error', err);
     });
     placa = (JSON.parse(buf || '{}').placa || '').replace(/[^A-Z0-9]/gi,'').toUpperCase();
   } catch {
@@ -65,29 +73,33 @@ module.exports = async (req, res) => {
   if (!placa || (!/^[A-Z]{3}\d{4}$/.test(placa) && !/^[A-Z]{3}\d[A-Z]\d{2}$/.test(placa)))
     return res.status(400).json({erro:true, msg:'Placa inválida.'});
 
-  // 1. Cache
+  // ── 1. Verifica cache ────────────────────────────────────────────────────
   if (SUPABASE_URL && SUPABASE_KEY) {
     try {
-      const rc = await fetch(`${SUPABASE_URL}/rest/v1/veiculos?placa=eq.${placa}&limit=1`, { headers: sbH() });
-      const cached = await rc.json();
-      if (cached?.[0]) {
-        const c = cached[0];
-        let catId = c.categoria_id;
+      const rc = await fetch(
+        `${SUPABASE_URL}/rest/v1/veiculos?placa=eq.${placa}&limit=1`,
+        { headers: sbH() }
+      );
+      const rows = await rc.json();
+      const c    = rows?.[0];
 
-        // Sempre busca categoria atual do sub-segmento (reflete mudanças)
+      if (c) {
+        // Sempre busca a categoria ATUAL do sub-segmento (reflete mudanças)
+        let catId     = c.categoria_id;
+        let subSegNome= c.sub_seg_nome;
+
         if (c.fk_sub_segmento && !c.categoria_manual) {
-          const rs = await fetch(
-            `${SUPABASE_URL}/rest/v1/sub_segmentos?id=eq.${c.fk_sub_segmento}&select=categoria_id,nome&limit=1`,
-            { headers: sbH() }
-          );
-          const sub = await rs.json();
-          if (sub?.[0]?.categoria_id) catId = sub[0].categoria_id;
+          const sub = await getCatSubSeg(c.fk_sub_segmento);
+          if (sub?.categoria_id) {
+            catId      = sub.categoria_id;
+            subSegNome = sub.nome;
+          }
         }
 
-        // Atualiza timestamp em background
+        // Atualiza categoria e timestamp no cache
         fetch(`${SUPABASE_URL}/rest/v1/veiculos?placa=eq.${placa}`, {
-          method:'PATCH', headers:{...sbH(),Prefer:'return=minimal'},
-          body: JSON.stringify({consultado_em: new Date().toISOString()}),
+          method:'PATCH', headers:{...sbH(), Prefer:'return=minimal'},
+          body: JSON.stringify({ categoria_id: catId, consultado_em: new Date().toISOString() }),
         }).catch(()=>{});
 
         return res.status(200).json({
@@ -95,61 +107,70 @@ module.exports = async (req, res) => {
           _cache:           true,
           _categoriaId:     catId,
           _categoriaManual: c.categoria_manual,
-          _subSegNome:      c.sub_seg_nome || null,
+          _subSegNome:      subSegNome,
         });
       }
     } catch(e) { console.error('[cache]', e.message); }
   }
 
-  // 2. API externa
+  // ── 2. Consulta API externa ───────────────────────────────────────────────
   let apiData;
   try {
     const r   = await fetch(`https://wdapi2.com.br/consulta/${placa}/${TOKEN}`, {
       headers:{Accept:'application/json'}, signal:AbortSignal.timeout(10000),
     });
     const txt = await r.text();
-    if (!r.ok) return res.status(r.status).json({erro:true, msg:`Erro ${r.status} da API`});
-    apiData = JSON.parse(txt);
-    if (apiData.erro || apiData.error)
-      return res.status(400).json({erro:true, msg: apiData.msg||'Placa não encontrada.'});
+    if (!r.ok) return res.status(r.status).json({erro:true, msg:`Erro ${r.status}`});
+    apiData   = JSON.parse(txt);
+    if (apiData.erro||apiData.error)
+      return res.status(400).json({erro:true, msg:apiData.msg||'Placa não encontrada.'});
   } catch(e) {
-    return res.status(500).json({erro:true, msg:`Erro de conexão: ${e.message}`});
+    return res.status(500).json({erro:true, msg:`Erro: ${e.message}`});
   }
 
-  // 3. Busca categoria
-  const ex    = apiData.extra || {};
-  const marca = apiData.MARCA || '';
-  const modelo= apiData.MODELO || ex.modelo || '';
+  // ── 3. Determina modelo completo e busca categoria ────────────────────────
+  const ex             = apiData.extra || {};
+  // USA extra.modelo pois já vem no formato "HYUNDAI/CRETA 16A ATTITU"
+  const modeloCompleto = ex.modelo || apiData.marcaModelo || `${apiData.MARCA}/${apiData.MODELO}` || '';
+  const modelo         = apiData.MODELO || ex.modelo || '';
+  const marca          = apiData.MARCA  || '';
 
   let categoriaId = null, subSegId = null, subSegNome = null;
-  if (marca && modelo) {
-    const mc = await buscarCategoria(marca, modelo);
-    if (mc) { categoriaId = mc.categoriaId; subSegId = mc.subSegId; subSegNome = mc.subSegNome; }
+
+  if (modeloCompleto) {
+    const mc = await buscarCategoria(modeloCompleto);
+    if (mc) {
+      categoriaId = mc.categoriaId;
+      subSegId    = mc.subSegId;
+      subSegNome  = mc.subSegNome;
+    }
   }
 
-  // 4. Salva
+  // ── 4. Salva no banco ─────────────────────────────────────────────────────
   if (SUPABASE_URL && SUPABASE_KEY) {
     await fetch(`${SUPABASE_URL}/rest/v1/veiculos`, {
       method:'POST',
       headers:{...sbH(), Prefer:'resolution=merge-duplicates'},
       body: JSON.stringify({
-        placa, marca, modelo,
-        fk_sub_segmento: subSegId   || null,
-        sub_seg_nome:    subSegNome || null,
-        ano:             apiData.ano || ex.ano_fabricacao || '',
-        ano_modelo:      apiData.anoModelo || ex.ano_modelo || '',
-        cor:             apiData.cor || '',
-        combustivel:     ex.combustivel || '',
-        especie:         ex.especie || '',
-        municipio:       ex.municipio || '',
-        uf:              ex.uf || '',
-        chassi:          apiData.chassi || '',
-        codigo_situacao: String(apiData.codigoSituacao ?? '0'),
-        categoria_id:    categoriaId || null,
+        placa,
+        marca,
+        modelo,
+        fk_sub_segmento:  subSegId    || null,
+        sub_seg_nome:     subSegNome  || null,
+        ano:              apiData.ano || ex.ano_fabricacao || '',
+        ano_modelo:       apiData.anoModelo || ex.ano_modelo || '',
+        cor:              apiData.cor || '',
+        combustivel:      ex.combustivel || '',
+        especie:          ex.especie || '',
+        municipio:        ex.municipio || '',
+        uf:               ex.uf || '',
+        chassi:           apiData.chassi || '',
+        codigo_situacao:  String(apiData.codigoSituacao ?? '0'),
+        categoria_id:     categoriaId || null,
         categoria_manual: false,
-        consultas:       1,
-        consultado_em:   new Date().toISOString(),
-        dados:           apiData,
+        consultas:        1,
+        consultado_em:    new Date().toISOString(),
+        dados:            apiData,
       }),
     }).catch(e => console.error('[save]', e.message));
   }
