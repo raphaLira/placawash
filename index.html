@@ -832,9 +832,10 @@ function OSScreen({cats, onAbrirOS}) {
   async function load() {
     try {
       const r = await fetch('/api/os?action=fila');
+      if (!r.ok) { console.warn('[OS] fila erro', r.status); setLoading(false); return; }
       const d = await r.json();
       setOs(d.rows||[]);
-    } catch(e){console.error(e);}
+    } catch(e){console.error('[OS]',e.message);}
     finally{setLoading(false);}
   }
 
@@ -988,8 +989,9 @@ function CaixaScreen({cats}) {
     setLoading(true);
     try {
       const r = await fetch(`/api/os?action=caixa&data=${data}`);
+      if (!r.ok) { setLoading(false); return; }
       setCaixa(await r.json());
-    } catch(e){console.error(e);}
+    } catch(e){console.error('[Caixa]',e.message);}
     finally{setLoading(false);}
   }
 
@@ -1057,6 +1059,150 @@ function CaixaScreen({cats}) {
   );
 }
 
+
+/* ─── WHATSAPP HELPERS ──────────────────────────────────── */
+function fmtFone(tel) {
+  const n = (tel||'').replace(/\D/g,'');
+  return n.startsWith('55') ? n : '55'+n;
+}
+
+function abrirWhatsEntrada({telefone, placa, marca, modelo, cor, servico, valor}) {
+  if (!telefone) return;
+  const sv  = SERVICOS.find(s=>s.id===servico)||{label:'Lavagem'};
+  const msg = `🚗 *PlacaWash*\n\nOlá! Recebemos seu veículo:\n*${marca||''} ${modelo||''} ${cor?'— '+cor:''}*\nPlaca: *${fmtDisp(placa)}*\n\nServiço: *${sv.label}*\nValor: *R$ ${valor}*\n\nAssim que ficar pronto te avisamos! ⏳`;
+  window.open(`https://wa.me/${fmtFone(telefone)}?text=${encodeURIComponent(msg)}`,'_blank');
+}
+
+function abrirWhatsEntregue({telefone, placa, marca, modelo, cor, servico, valor}) {
+  if (!telefone) return;
+  const sv  = SERVICOS.find(s=>s.id===servico)||{label:'Lavagem'};
+  const msg = `✅ *PlacaWash*\n\nSeu veículo está pronto!\n*${marca||''} ${modelo||''} ${cor?'— '+cor:''}*\nPlaca: *${fmtDisp(placa)}*\n\nServiço: *${sv.label}*\nValor: *R$ ${valor}*\n\nObrigado pela preferência! 💧`;
+  window.open(`https://wa.me/${fmtFone(telefone)}?text=${encodeURIComponent(msg)}`,'_blank');
+}
+
+/* ─── NOVA OS MODAL (com cliente e WhatsApp) ─────────────── */
+
+/* ─── OS SCREEN (FILA) ──────────────────────────────────── */
+const STATUS_CONFIG = {
+  aguardando:  {label:'Aguardando', color:'#ffc107', emoji:'⏳', next:'em_lavagem', nextLabel:'▶ Iniciar'},
+  em_lavagem:  {label:'Em Lavagem', color:'#00e5ff', emoji:'💧', next:'pronto',     nextLabel:'✅ Finalizar'},
+  pronto:      {label:'Pronto',     color:'#4caf50', emoji:'✅', next:null,         nextLabel:null},
+  cancelado:   {label:'Cancelado',  color:'#f44336', emoji:'❌', next:null,         nextLabel:null},
+};
+
+
+/* ─── CAIXA DO DIA ──────────────────────────────────────── */
+
+/* ─── PLANOS SCREEN ─────────────────────────────────────── */
+function PlanosScreen() {
+  const [planos,   setPlanos]   = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [saving,   setSaving]   = useState(false);
+  const [form, setForm] = useState({nome:'',qtd_lavagens:8,valor:0,servico:'simples',descricao:''});
+  const sf = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  useEffect(()=>{ loadPlanos(); },[]);
+
+  async function loadPlanos() {
+    setLoading(true);
+    try { const r=await fetch('/api/planos'); setPlanos(await r.json()||[]); }
+    catch(e){console.error(e);} finally{setLoading(false);}
+  }
+
+  async function salvarPlano() {
+    if (!form.nome||!form.valor) return;
+    setSaving(true);
+    try {
+      await fetch('/api/planos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)});
+      await loadPlanos(); setShowForm(false); setForm({nome:'',qtd_lavagens:8,valor:0,servico:'simples',descricao:''});
+    } catch(e){console.error(e);} finally{setSaving(false);}
+  }
+
+  async function deletarPlano(id) {
+    if (!confirm('Remover plano?')) return;
+    await fetch(`/api/planos?id=${id}`,{method:'DELETE'});
+    setPlanos(p=>p.filter(x=>x.id!==id));
+  }
+
+  return (
+    <div style={{padding:'14px 16px 88px',maxWidth:640,margin:'0 auto'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+        <div>
+          <div style={{fontFamily:'Bebas Neue,cursive',fontSize:28,color:'var(--neon)',letterSpacing:'.05em'}}>PLANOS MENSAIS</div>
+          <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>Pacotes de lavagem para clientes fixos</div>
+        </div>
+        <button onClick={()=>setShowForm(true)} style={{padding:'8px 14px',borderRadius:9,fontSize:12,fontWeight:700,cursor:'pointer',background:'linear-gradient(135deg,rgba(0,229,255,.18),rgba(0,229,255,.08))',border:'1px solid rgba(0,229,255,.4)',color:'var(--neon)'}}>+ Novo</button>
+      </div>
+
+      {loading&&<div style={{textAlign:'center',padding:'32px',color:'var(--dim)'}}>Carregando…</div>}
+
+      <div style={{display:'flex',flexDirection:'column',gap:10}}>
+        {planos.map(p=>{
+          const sv = SERVICOS.find(s=>s.id===p.servico)||{emoji:'💧',label:p.servico};
+          const vlLav = p.qtd_lavagens>0?Math.round(p.valor/p.qtd_lavagens):0;
+          return (
+            <div key={p.id} style={{background:'var(--s1)',border:'1px solid rgba(0,229,255,.15)',borderRadius:13,padding:'14px 16px'}}>
+              <div style={{display:'flex',alignItems:'flex-start',gap:12}}>
+                <div style={{width:48,height:48,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(0,229,255,.1)',border:'1px solid rgba(0,229,255,.2)',fontSize:22,flexShrink:0}}>📋</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,fontSize:14,color:'var(--txt)',marginBottom:4}}>{p.nome}</div>
+                  <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                    <span className="chip chip-blue">{p.qtd_lavagens} lavagens/mês</span>
+                    <span style={{fontSize:11,padding:'2px 8px',borderRadius:20,background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.1)',color:'var(--dim)'}}>{sv.emoji} {sv.label}</span>
+                    <span style={{fontSize:11,padding:'2px 8px',borderRadius:20,background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.1)',color:'var(--dim)'}}>R$ {vlLav}/lav.</span>
+                  </div>
+                  {p.descricao&&<div style={{fontSize:11,color:'var(--dim)',marginTop:4}}>{p.descricao}</div>}
+                </div>
+                <div style={{textAlign:'right',flexShrink:0}}>
+                  <div style={{fontFamily:'Bebas Neue,cursive',fontSize:28,color:'var(--acid)',lineHeight:1}}>R$ {p.valor}</div>
+                  <div style={{fontSize:10,color:'var(--dim)'}}>por mês</div>
+                </div>
+              </div>
+              <div style={{display:'flex',gap:7,marginTop:12,paddingTop:12,borderTop:'1px solid rgba(255,255,255,.05)'}}>
+                <button onClick={()=>deletarPlano(p.id)} style={{padding:'6px 14px',borderRadius:7,fontSize:11,cursor:'pointer',background:'rgba(244,67,54,.07)',border:'1px solid rgba(244,67,54,.2)',color:'#f44336'}}>🗑 Remover</button>
+              </div>
+            </div>
+          );
+        })}
+        {!loading&&planos.length===0&&(
+          <div style={{textAlign:'center',padding:'48px 0'}}>
+            <div style={{fontSize:48,marginBottom:12,opacity:.2}}>📋</div>
+            <div style={{fontSize:14,color:'var(--dim)'}}>Nenhum plano cadastrado</div>
+          </div>
+        )}
+      </div>
+
+      {showForm&&(
+        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowForm(false)}>
+          <div className="up" style={{width:'100%',maxWidth:480,background:'var(--s1)',border:'1px solid var(--bdr)',borderRadius:20,padding:24,maxHeight:'88vh',overflowY:'auto'}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20}}>
+              <div style={{fontFamily:'Bebas Neue,cursive',fontSize:24,color:'var(--neon)'}}>NOVO PLANO</div>
+              <button onClick={()=>setShowForm(false)} style={{padding:8,borderRadius:8,background:'rgba(255,255,255,.05)',border:'none',cursor:'pointer',color:'var(--dim)',fontSize:18}}>✕</button>
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:14}}>
+              <div><label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:5,textTransform:'uppercase'}}>Nome do plano *</label><input type="text" value={form.nome} onChange={e=>sf('nome',e.target.value)} placeholder="Ex: Mensal Básico" className="fi"/></div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+                <div><label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:5,textTransform:'uppercase'}}>Lavagens/mês</label><input type="number" min="1" value={form.qtd_lavagens} onChange={e=>sf('qtd_lavagens',parseInt(e.target.value)||1)} className="fi"/></div>
+                <div><label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:5,textTransform:'uppercase'}}>Valor R$</label><input type="number" min="0" value={form.valor} onChange={e=>sf('valor',parseInt(e.target.value)||0)} className="fi" style={{fontFamily:'JetBrains Mono,monospace',fontWeight:700,color:'var(--acid)'}}/></div>
+              </div>
+              <div><label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:5,textTransform:'uppercase'}}>Tipo de serviço</label>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:7}}>
+                  {SERVICOS.map(s=>(<button key={s.id} onClick={()=>sf('servico',s.id)} style={{padding:'8px',borderRadius:8,fontSize:12,cursor:'pointer',textAlign:'left',background:form.servico===s.id?'rgba(0,229,255,.12)':'rgba(255,255,255,.04)',border:`1px solid ${form.servico===s.id?'rgba(0,229,255,.4)':'rgba(255,255,255,.09)'}`,color:form.servico===s.id?'var(--neon)':'var(--dim)'}}>{s.emoji} {s.label}</button>))}
+                </div>
+              </div>
+              <div><label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:5,textTransform:'uppercase'}}>Descrição</label><input type="text" value={form.descricao} onChange={e=>sf('descricao',e.target.value)} placeholder="Ex: Inclui aspiração" className="fi"/></div>
+            </div>
+            <button onClick={salvarPlano} disabled={saving||!form.nome||!form.valor} style={{width:'100%',marginTop:20,padding:13,borderRadius:12,fontWeight:700,fontSize:14,cursor:'pointer',background:'linear-gradient(135deg,rgba(0,229,255,.18),rgba(0,229,255,.08))',border:'1px solid rgba(0,229,255,.4)',color:'var(--neon)'}}>
+              {saving?'Salvando…':'✓ Criar Plano'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [cats,     setCats]     = useState(CAT_FB);
   const [historico,setHistorico]= useState(loadHist);
@@ -1114,7 +1260,7 @@ function App() {
     <div className="grid-bg" style={{minHeight:'100vh',display:'flex',flexDirection:'column'}}>
       <div style={{position:'fixed',top:0,left:'50%',transform:'translateX(-50%)',width:'500px',height:'220px',borderRadius:'50%',opacity:.07,filter:'blur(70px)',background:'radial-gradient(ellipse,#00e5ff,transparent 70%)',pointerEvents:'none',zIndex:0}}/>
       <nav className="nav">
-        {[['consulta','🔍','Consultar'],['os','🧾','OS/Fila'],['caixa','💵','Caixa'],['clientes','🗂️','Clientes'],['subseg','🏷️','Sub-Seg'],['precos','💰','Preços']].map(([id,ic,lb])=>(
+        {[['consulta','🔍','Consultar'],['os','🧾','OS/Fila'],['caixa','💵','Caixa'],['clientes','🗂️','Clientes'],['planos','📋','Planos'],['subseg','🏷️','Sub-Seg'],['precos','💰','Preços']].map(([id,ic,lb])=>(
           <button key={id} onClick={()=>setScreen(id)} className={`nav-btn ${screen===id?'on':''}`}>
             <span style={{fontSize:18}}>{ic}</span><span>{lb}</span>
           </button>
@@ -1194,6 +1340,7 @@ function App() {
         {screen==='os'       && <OSScreen cats={cats} onAbrirOS={(d)=>{setOsData(d);setModal('novaOS');}}/>}
         {screen==='caixa'    && <CaixaScreen cats={cats}/>}
         {screen==='clientes' && <ClientesScreen cats={cats} historico={historico} onSelectPlate={p=>{setPlate(cleanP(p));doSearch(p);}}/>}
+        {screen==='planos'   && <PlanosScreen/>}
         {screen==='subseg'   && <SubSegmentosScreen cats={cats}/>}
         {screen==='precos'   && <PriceManager cats={cats} onReload={reloadCats}/>}
       </div>
