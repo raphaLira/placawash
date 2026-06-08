@@ -698,6 +698,365 @@ function CatFormModal({inicial, saving, onClose, onSave, idsExistentes}) {
 }
 
 /* ─── APP ───────────────────────────────────────────────────── */
+
+/* ─── NOVA OS MODAL ─────────────────────────────────────── */
+const SERVICOS = [
+  {id:'simples',    label:'Simples',     emoji:'💧', desc:'Lavagem externa',            mult:1.0},
+  {id:'completa',   label:'Completa',    emoji:'✨', desc:'Externa + interna',           mult:1.5},
+  {id:'polimento',  label:'Polimento',   emoji:'💎', desc:'Polimento + cera',            mult:2.5},
+  {id:'higienizacao',label:'Higienização',emoji:'🧹',desc:'Higienização completa interna',mult:2.0},
+];
+
+function NovaOSModal({data, cats, onClose, onSaved}) {
+  const cat = data.cat || (data.categoria_id && cats[data.categoria_id]);
+  const [servico,  setServico]  = useState('simples');
+  const [valor,    setValor]    = useState(cat?.preco||0);
+  const [obs,      setObs]      = useState('');
+  const [saving,   setSaving]   = useState(false);
+
+  // Atualiza valor ao trocar serviço
+  useEffect(()=>{
+    const base  = cat?.preco || 0;
+    const mult  = SERVICOS.find(s=>s.id===servico)?.mult || 1;
+    setValor(Math.round(base * mult));
+  },[servico, cat]);
+
+  async function salvar() {
+    setSaving(true);
+    try {
+      await fetch('/api/os', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          placa:        data.placa,
+          marca:        data.marca,
+          modelo:       data.modelo,
+          cor:          data.cor,
+          categoria_id: data.categoria_id,
+          servico,
+          valor,
+          obs,
+        }),
+      });
+      onSaved();
+    } catch(e){console.error(e);}
+    finally{setSaving(false);}
+  }
+
+  const sv = SERVICOS.find(s=>s.id===servico);
+
+  return (
+    <div className="overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="up" style={{width:'100%',maxWidth:480,background:'var(--s1)',border:'1px solid var(--bdr)',borderRadius:20,padding:24,maxHeight:'90vh',overflowY:'auto'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+          <div>
+            <div style={{fontFamily:'Bebas Neue,cursive',fontSize:26,color:'var(--acid)'}}>NOVA ORDEM DE SERVIÇO</div>
+            <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>
+              <span style={{fontFamily:'JetBrains Mono,monospace',fontWeight:700,color:'var(--neon)'}}>{fmtDisp(data.placa)}</span>
+              {data.modelo&&<span style={{marginLeft:8}}>{data.marca} {data.modelo}</span>}
+            </div>
+          </div>
+          <button onClick={onClose} style={{padding:8,borderRadius:8,background:'rgba(255,255,255,.05)',border:'none',cursor:'pointer',color:'var(--dim)',fontSize:18}}>✕</button>
+        </div>
+
+        {/* Categoria */}
+        {cat&&(
+          <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',borderRadius:10,marginBottom:16,background:`${cat.color}10`,border:`1px solid ${cat.color}30`}}>
+            <span style={{fontSize:22}}>{cat.emoji}</span>
+            <div><div style={{fontSize:12,fontWeight:600,color:cat.color}}>{cat.label}</div><div style={{fontSize:11,color:'var(--dim)'}}>Preço base: R$ {cat.preco}</div></div>
+          </div>
+        )}
+
+        {/* Tipo de serviço */}
+        <div style={{marginBottom:16}}>
+          <label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:8,textTransform:'uppercase',letterSpacing:'.05em'}}>Tipo de Serviço</label>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            {SERVICOS.map(s=>(
+              <button key={s.id} onClick={()=>setServico(s.id)} style={{
+                padding:'10px 12px',borderRadius:10,cursor:'pointer',textAlign:'left',
+                background:servico===s.id?'rgba(204,255,0,.12)':'rgba(255,255,255,.03)',
+                border:`2px solid ${servico===s.id?'rgba(204,255,0,.5)':'rgba(255,255,255,.08)'}`,
+              }}>
+                <div style={{fontSize:20,marginBottom:2}}>{s.emoji}</div>
+                <div style={{fontSize:12,fontWeight:600,color:servico===s.id?'var(--acid)':'var(--txt)'}}>{s.label}</div>
+                <div style={{fontSize:10,color:'var(--dim)'}}>{s.desc}</div>
+                {cat&&<div style={{fontSize:11,fontWeight:700,color:'var(--acid)',marginTop:3}}>R$ {Math.round((cat.preco||0)*s.mult)}</div>}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Valor */}
+        <div style={{marginBottom:14}}>
+          <label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:6,textTransform:'uppercase'}}>Valor (R$)</label>
+          <input type="number" min="0" step="5" value={valor} onChange={e=>setValor(Number(e.target.value)||0)}
+            style={{width:'100%',background:'rgba(0,0,0,.4)',border:'1px solid rgba(204,255,0,.3)',borderRadius:8,padding:'10px 14px',fontSize:22,fontFamily:'JetBrains Mono,monospace',fontWeight:700,color:'var(--acid)',outline:'none',textAlign:'center'}}/>
+        </div>
+
+        {/* Obs */}
+        <div style={{marginBottom:20}}>
+          <label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:6,textTransform:'uppercase'}}>Observação (opcional)</label>
+          <input type="text" value={obs} onChange={e=>setObs(e.target.value)} placeholder="Ex: risco no lado direito..." className="fi"/>
+        </div>
+
+        <button onClick={salvar} disabled={saving||!valor} style={{
+          width:'100%',padding:14,borderRadius:12,fontWeight:700,fontSize:15,
+          cursor:saving||!valor?'not-allowed':'pointer',opacity:!valor?.4:1,
+          display:'flex',alignItems:'center',justifyContent:'center',gap:8,
+          background:'linear-gradient(135deg,rgba(204,255,0,.25),rgba(204,255,0,.1))',
+          border:'2px solid rgba(204,255,0,.5)',color:'var(--acid)',
+        }}>
+          {saving?<span style={{width:16,height:16,border:'2px solid currentColor',borderTopColor:'transparent',borderRadius:'50%',display:'inline-block',animation:'spin .9s linear infinite'}}/>:'🧾'}
+          {saving?'Abrindo OS…':`Abrir OS — R$ ${valor}`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── OS SCREEN (FILA) ──────────────────────────────────── */
+const STATUS_CONFIG = {
+  aguardando:  {label:'Aguardando',  color:'#ffc107', emoji:'⏳', next:'em_lavagem', nextLabel:'Iniciar'},
+  em_lavagem:  {label:'Em Lavagem',  color:'#00e5ff', emoji:'💧', next:'pronto',     nextLabel:'Finalizar'},
+  pronto:      {label:'Pronto',      color:'#4caf50', emoji:'✅', next:null,         nextLabel:null},
+  cancelado:   {label:'Cancelado',   color:'#f44336', emoji:'❌', next:null,         nextLabel:null},
+};
+
+function OSScreen({cats, onAbrirOS}) {
+  const [os,      setOs]      = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [upd,     setUpd]     = useState({});
+  const timer = useRef(null);
+
+  useEffect(()=>{ load(); timer.current=setInterval(load,30000); return()=>clearInterval(timer.current); },[]);
+
+  async function load() {
+    try {
+      const r = await fetch('/api/os?action=fila');
+      const d = await r.json();
+      setOs(d.rows||[]);
+    } catch(e){console.error(e);}
+    finally{setLoading(false);}
+  }
+
+  async function avancar(id, novoStatus) {
+    setUpd(u=>({...u,[id]:true}));
+    try {
+      await fetch(`/api/os?id=${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:novoStatus})});
+      setOs(o=>o.map(x=>x.id===id?{...x,status:novoStatus}:x));
+    } catch(e){console.error(e);}
+    finally{setUpd(u=>({...u,[id]:false}));}
+  }
+
+  async function cancelar(id) {
+    if (!confirm('Cancelar esta OS?')) return;
+    setUpd(u=>({...u,[id]:true}));
+    try {
+      await fetch(`/api/os?id=${id}`,{method:'DELETE'});
+      setOs(o=>o.map(x=>x.id===id?{...x,status:'cancelado'}:x));
+    } catch(e){console.error(e);}
+    finally{setUpd(u=>({...u,[id]:false}));}
+  }
+
+  const ativos    = os.filter(o=>['aguardando','em_lavagem'].includes(o.status));
+  const finalizados= os.filter(o=>o.status==='pronto');
+  const totalDia  = finalizados.reduce((s,o)=>s+(o.valor||0),0);
+
+  return (
+    <div style={{padding:'14px 16px 88px',maxWidth:640,margin:'0 auto'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
+        <div>
+          <div style={{fontFamily:'Bebas Neue,cursive',fontSize:28,color:'var(--neon)',letterSpacing:'.05em'}}>FILA DO DIA</div>
+          <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>Atualiza automaticamente a cada 30s</div>
+        </div>
+        <button onClick={load} style={{padding:'7px 14px',borderRadius:8,fontSize:12,cursor:'pointer',background:'rgba(0,229,255,.1)',border:'1px solid rgba(0,229,255,.25)',color:'var(--neon)'}}>↺ Atualizar</button>
+      </div>
+
+      {/* Resumo do dia */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:16}}>
+        {[
+          ['Fila',    ativos.length,       'var(--neon)'],
+          ['Prontos', finalizados.length,  '#4caf50'   ],
+          ['Total',   `R$${totalDia}`,     'var(--acid)'],
+        ].map(([lb,val,cor])=>(
+          <div key={lb} style={{background:'var(--s2)',borderRadius:10,padding:'10px 12px',border:'1px solid var(--bdr)',textAlign:'center'}}>
+            <div style={{fontFamily:'Bebas Neue,cursive',fontSize:24,color:cor,lineHeight:1}}>{val}</div>
+            <div style={{fontSize:11,color:'var(--dim)',marginTop:2}}>{lb}</div>
+          </div>
+        ))}
+      </div>
+
+      {loading&&<div style={{textAlign:'center',padding:'32px 0',color:'var(--dim)',fontSize:13}}>Carregando…</div>}
+
+      {/* OS Ativas */}
+      {ativos.length>0&&(
+        <div style={{marginBottom:20}}>
+          <div style={{fontSize:12,fontWeight:700,color:'var(--neon)',letterSpacing:'.08em',textTransform:'uppercase',padding:'4px 0',marginBottom:8,borderBottom:'1px solid rgba(0,229,255,.15)'}}>
+            Em andamento — {ativos.length}
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {ativos.map(o=>{
+              const st  = STATUS_CONFIG[o.status]||STATUS_CONFIG.aguardando;
+              const cat = o.categoria_id&&cats[o.categoria_id];
+              const sv  = SERVICOS.find(s=>s.id===o.servico);
+              return (
+                <div key={o.id} style={{background:'var(--s1)',border:`2px solid ${st.color}40`,borderRadius:12,padding:'12px 14px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+                    <span style={{fontSize:24}}>{st.emoji}</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                        <span style={{fontFamily:'JetBrains Mono,monospace',fontWeight:700,fontSize:16,color:'var(--neon)'}}>{fmtDisp(o.placa)}</span>
+                        <span style={{fontSize:11,padding:'2px 8px',borderRadius:20,background:`${st.color}20`,border:`1px solid ${st.color}40`,color:st.color,fontWeight:600}}>{st.label}</span>
+                        {cat&&<span style={{fontSize:11,padding:'2px 7px',borderRadius:20,background:`${cat.color}15`,border:`1px solid ${cat.color}30`,color:cat.color}}>{cat.emoji} {cat.label}</span>}
+                      </div>
+                      <div style={{fontSize:12,color:'var(--txt)',marginTop:2}}>{o.marca} {o.modelo}</div>
+                      {o.cor&&<div style={{fontSize:11,color:'var(--dim)'}}>🎨 {o.cor}</div>}
+                      {o.obs&&<div style={{fontSize:11,color:'var(--dim)',marginTop:2}}>📝 {o.obs}</div>}
+                    </div>
+                    <div style={{textAlign:'right',flexShrink:0}}>
+                      <div style={{fontFamily:'Bebas Neue,cursive',fontSize:28,color:'var(--acid)',lineHeight:1}}>R$ {o.valor}</div>
+                      <div style={{fontSize:10,color:'var(--dim)'}}>{sv?.emoji} {sv?.label}</div>
+                    </div>
+                  </div>
+                  <div style={{display:'flex',gap:6}}>
+                    {st.next&&(
+                      <button onClick={()=>avancar(o.id,st.next)} disabled={!!upd[o.id]}
+                        style={{flex:1,padding:'9px',borderRadius:8,fontSize:12,fontWeight:700,cursor:'pointer',
+                          background:o.status==='aguardando'?'rgba(0,229,255,.15)':'rgba(76,175,80,.15)',
+                          border:`1px solid ${o.status==='aguardando'?'rgba(0,229,255,.4)':'rgba(76,175,80,.4)'}`,
+                          color:o.status==='aguardando'?'var(--neon)':'#4caf50'}}>
+                        {upd[o.id]?'…':`${o.status==='aguardando'?'▶ Iniciar':'✅ Finalizar'}`}
+                      </button>
+                    )}
+                    <button onClick={()=>cancelar(o.id)} style={{padding:'9px 14px',borderRadius:8,fontSize:12,cursor:'pointer',background:'rgba(244,67,54,.08)',border:'1px solid rgba(244,67,54,.2)',color:'#f44336'}}>✕</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* OS Prontas */}
+      {finalizados.length>0&&(
+        <div>
+          <div style={{fontSize:12,fontWeight:700,color:'#4caf50',letterSpacing:'.08em',textTransform:'uppercase',padding:'4px 0',marginBottom:8,borderBottom:'1px solid rgba(76,175,80,.2)'}}>
+            Prontos hoje — {finalizados.length}
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+            {finalizados.map(o=>{
+              const cat = o.categoria_id&&cats[o.categoria_id];
+              const sv  = SERVICOS.find(s=>s.id===o.servico);
+              return (
+                <div key={o.id} style={{background:'var(--s1)',border:'1px solid rgba(76,175,80,.2)',borderRadius:10,padding:'10px 14px',display:'flex',alignItems:'center',gap:10}}>
+                  <span style={{fontSize:20}}>✅</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8}}>
+                      <span style={{fontFamily:'JetBrains Mono,monospace',fontWeight:700,fontSize:14,color:'var(--neon)'}}>{fmtDisp(o.placa)}</span>
+                      {cat&&<span style={{fontSize:10,color:cat.color}}>{cat.emoji} {cat.label}</span>}
+                    </div>
+                    <div style={{fontSize:11,color:'var(--dim)'}}>{o.marca} {o.modelo} · {sv?.emoji} {sv?.label}</div>
+                  </div>
+                  <div style={{fontFamily:'Bebas Neue,cursive',fontSize:22,color:'#4caf50',flexShrink:0}}>R$ {o.valor}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {!loading&&os.length===0&&(
+        <div style={{textAlign:'center',padding:'48px 0'}}>
+          <div style={{fontSize:48,marginBottom:12,opacity:.2}}>🧾</div>
+          <div style={{fontSize:14,color:'var(--dim)'}}>Nenhuma OS hoje</div>
+          <div style={{fontSize:12,color:'var(--dim)',marginTop:4,opacity:.6}}>Consulte uma placa e clique em "Abrir OS"</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── CAIXA DO DIA ──────────────────────────────────────── */
+function CaixaScreen({cats}) {
+  const hoje  = new Date().toISOString().split('T')[0];
+  const [data,    setData]    = useState(hoje);
+  const [caixa,   setCaixa]   = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(()=>{ load(); },[data]);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/os?action=caixa&data=${data}`);
+      setCaixa(await r.json());
+    } catch(e){console.error(e);}
+    finally{setLoading(false);}
+  }
+
+  return (
+    <div style={{padding:'14px 16px 88px',maxWidth:640,margin:'0 auto'}}>
+      <div style={{marginBottom:16}}>
+        <div style={{fontFamily:'Bebas Neue,cursive',fontSize:28,color:'var(--acid)',letterSpacing:'.05em'}}>CAIXA DO DIA</div>
+        <input type="date" value={data} onChange={e=>setData(e.target.value)}
+          style={{background:'var(--s2)',border:'1px solid var(--bdr)',borderRadius:8,padding:'8px 12px',color:'var(--txt)',fontSize:13,outline:'none',marginTop:8,width:'100%'}}/>
+      </div>
+
+      {loading&&<div style={{textAlign:'center',padding:'32px 0',color:'var(--dim)'}}>Carregando…</div>}
+
+      {!loading&&caixa&&(
+        <>
+          {/* Totais */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:20}}>
+            {[
+              ['Lavagens',  caixa.qtd,              'var(--neon)'],
+              ['Ticket Médio', `R$${caixa.ticket}`, '#7c4dff'   ],
+              ['Total',    `R$${caixa.total}`,       'var(--acid)'],
+            ].map(([lb,val,cor])=>(
+              <div key={lb} style={{background:'var(--s2)',borderRadius:12,padding:'14px 12px',border:`1px solid ${cor}30`,textAlign:'center'}}>
+                <div style={{fontFamily:'Bebas Neue,cursive',fontSize:28,color:cor,lineHeight:1}}>{val}</div>
+                <div style={{fontSize:11,color:'var(--dim)',marginTop:3}}>{lb}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Por tipo de serviço */}
+          {Object.keys(caixa.porServico||{}).length>0&&(
+            <div style={{background:'var(--s1)',borderRadius:12,padding:16,border:'1px solid var(--bdr)',marginBottom:16}}>
+              <div style={{fontSize:12,fontWeight:700,color:'var(--txt)',marginBottom:12,textTransform:'uppercase',letterSpacing:'.05em'}}>Por tipo de serviço</div>
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                {Object.entries(caixa.porServico).map(([sv,info])=>{
+                  const s = SERVICOS.find(x=>x.id===sv)||{emoji:'💧',label:sv};
+                  const pct = caixa.total>0?Math.round(info.total/caixa.total*100):0;
+                  return (
+                    <div key={sv}>
+                      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                        <span>{s.emoji}</span>
+                        <span style={{flex:1,fontSize:13,color:'var(--txt)'}}>{s.label}</span>
+                        <span style={{fontSize:12,color:'var(--dim)'}}>{info.qtd}x</span>
+                        <span style={{fontFamily:'Bebas Neue,cursive',fontSize:18,color:'var(--acid)'}}>R$ {info.total}</span>
+                      </div>
+                      <div style={{height:4,background:'rgba(255,255,255,.06)',borderRadius:2,overflow:'hidden'}}>
+                        <div style={{height:'100%',width:`${pct}%`,background:'var(--acid)',borderRadius:2,transition:'width .5s'}}/>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {caixa.qtd===0&&(
+            <div style={{textAlign:'center',padding:'48px 0'}}>
+              <div style={{fontSize:48,marginBottom:12,opacity:.2}}>💵</div>
+              <div style={{fontSize:14,color:'var(--dim)'}}>Nenhuma OS finalizada neste dia</div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [cats,     setCats]     = useState(CAT_FB);
   const [historico,setHistorico]= useState(loadHist);
@@ -707,6 +1066,7 @@ function App() {
   const [result,   setResult]   = useState(null);
   const [error,    setError]    = useState(null);
   const [modal,    setModal]    = useState(null);
+  const [osData,   setOsData]   = useState(null);
   const inputRef = useRef(null);
 
   // Carrega categorias do Supabase
@@ -754,7 +1114,7 @@ function App() {
     <div className="grid-bg" style={{minHeight:'100vh',display:'flex',flexDirection:'column'}}>
       <div style={{position:'fixed',top:0,left:'50%',transform:'translateX(-50%)',width:'500px',height:'220px',borderRadius:'50%',opacity:.07,filter:'blur(70px)',background:'radial-gradient(ellipse,#00e5ff,transparent 70%)',pointerEvents:'none',zIndex:0}}/>
       <nav className="nav">
-        {[['consulta','🔍','Consultar'],['clientes','🗂️','Clientes'],['subseg','🏷️','Sub-Seg'],['precos','💰','Preços']].map(([id,ic,lb])=>(
+        {[['consulta','🔍','Consultar'],['os','🧾','OS/Fila'],['caixa','💵','Caixa'],['clientes','🗂️','Clientes'],['subseg','🏷️','Sub-Seg'],['precos','💰','Preços']].map(([id,ic,lb])=>(
           <button key={id} onClick={()=>setScreen(id)} className={`nav-btn ${screen===id?'on':''}`}>
             <span style={{fontSize:18}}>{ic}</span><span>{lb}</span>
           </button>
@@ -818,13 +1178,21 @@ function App() {
                     <div style={{fontFamily:'Bebas Neue,cursive',fontSize:50,color:'var(--acid)',lineHeight:1,textShadow:'0 0 8px rgba(204,255,0,.9)'}}>R$&nbsp;{result.cat?.preco??0}</div>
                     <div style={{fontSize:12,color:'var(--dim)',marginTop:3}}>Categoria: <strong style={{color:'var(--txt)'}}>{result.cat?.label}</strong></div>
                   </div>
-                  <button onClick={()=>setScreen('precos')} style={{marginLeft:'auto',flexShrink:0,padding:'9px 15px',borderRadius:9,fontSize:12,background:'rgba(204,255,0,.1)',border:'1px solid rgba(204,255,0,.22)',color:'var(--acid)',cursor:'pointer'}}>Editar preços ›</button>
+                  <div style={{marginLeft:'auto',display:'flex',flexDirection:'column',gap:6,flexShrink:0}}>
+                  <button onClick={()=>{setOsData({placa:result.data.placa,marca:result.data.marca,modelo:result.data.modelo,cor:result.data.cor,categoria_id:result.cat?.id,cat:result.cat});setModal('novaOS');}}
+                    style={{padding:'10px 18px',borderRadius:9,fontSize:13,fontWeight:700,cursor:'pointer',background:'linear-gradient(135deg,rgba(204,255,0,.25),rgba(204,255,0,.1))',border:'2px solid rgba(204,255,0,.6)',color:'var(--acid)'}}>
+                    🧾 Abrir OS
+                  </button>
+                  <button onClick={()=>setScreen('precos')} style={{padding:'7px 15px',borderRadius:9,fontSize:11,background:'rgba(204,255,0,.06)',border:'1px solid rgba(204,255,0,.2)',color:'var(--acid)',cursor:'pointer'}}>Editar preços ›</button>
+                </div>
                 </div>
               </div>
             )}
           </div>
         )}
 
+        {screen==='os'       && <OSScreen cats={cats} onAbrirOS={(d)=>{setOsData(d);setModal('novaOS');}}/>}
+        {screen==='caixa'    && <CaixaScreen cats={cats}/>}
         {screen==='clientes' && <ClientesScreen cats={cats} historico={historico} onSelectPlate={p=>{setPlate(cleanP(p));doSearch(p);}}/>}
         {screen==='subseg'   && <SubSegmentosScreen cats={cats}/>}
         {screen==='precos'   && <PriceManager cats={cats} onReload={reloadCats}/>}
@@ -837,6 +1205,13 @@ function App() {
           setResult({data,cat});
           setModal(null);
         }}/>
+      )}
+      {modal==='novaOS'&&osData&&(
+        <NovaOSModal
+          data={osData} cats={cats}
+          onClose={()=>setModal(null)}
+          onSaved={()=>{setModal(null);setScreen('os');}}
+        />
       )}
       {modal==='editCat'&&result&&(
         <EditCatModal data={result.data} catAtual={result.cat} cats={cats}
