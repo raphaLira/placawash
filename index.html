@@ -699,7 +699,9 @@ function ModelosScreen({cats}) {
       const p=new URLSearchParams({page:pg}); if(bq) p.append('busca',bq);
       const r=await fetch('/api/modelos?'+p);
       const d=await r.json();
-      setRows(d.rows||[]); setTotal(d.total||0); setPages(d.pages||1); setPage(pg);
+      // Garante array mesmo se API retornar objeto ou erro
+      const rowsData = Array.isArray(d?.rows) ? d.rows : Array.isArray(d) ? d : [];
+      setRows(rowsData); setTotal(d?.total||0); setPages(d?.pages||1); setPage(pg);
     }catch(e){console.error(e);}finally{setLoading(false);}
   }
   function handleBusca(v){ setBusca(v); clearTimeout(timer.current); timer.current=setTimeout(()=>loadMod(1,v),400); }
