@@ -200,14 +200,14 @@ function VehicleGrid({d}) {
 function EditCatModal({data, catAtual, cats, onClose, onSaved}) {
   const [sel,setSel]       = useState(catAtual?.id||'');
   const [saving,setSaving] = useState(false);
-  const [saved,setSaved2]  = useState(false);
+  const [saved,setSaved]   = useState(false);
   async function go() {
     if (!sel||sel===catAtual?.id){onClose();return;}
     setSaving(true);
     try{
       await fetch('/api/atualizar',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({placa:data.placa,categoriaId:sel,marca:data.marca,modelo:data.modelo})});
-      setSaved2(true);
+      setSaved(true);
       setTimeout(()=>{onSaved(cats[sel]||CAT_FB[sel]);onClose();},900);
     }catch(e){console.error(e);}finally{setSaving(false);}
   }
@@ -234,9 +234,9 @@ function EditCatModal({data, catAtual, cats, onClose, onSaved}) {
             </button>
           ))}
         </div>
-        <button onClick={go} disabled={saving||saved2||!sel} style={{width:'100%',padding:14,borderRadius:12,fontWeight:600,fontSize:14,cursor:saving||saved2?'default':'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8,background:saved2?'rgba(76,175,80,.15)':'linear-gradient(135deg,rgba(204,255,0,.18),rgba(204,255,0,.08))',border:`1px solid ${saved2?'rgba(76,175,80,.4)':'rgba(204,255,0,.4)'}`,color:saved2?'#4caf50':'var(--acid)',opacity:!sel?.4:1}}>
+        <button onClick={go} disabled={saving||saved||!sel} style={{width:'100%',padding:14,borderRadius:12,fontWeight:600,fontSize:14,cursor:saving||saved?'default':'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8,background:saved?'rgba(76,175,80,.15)':'linear-gradient(135deg,rgba(204,255,0,.18),rgba(204,255,0,.08))',border:`1px solid ${saved?'rgba(76,175,80,.4)':'rgba(204,255,0,.4)'}`,color:saved?'#4caf50':'var(--acid)',opacity:!sel?.4:1}}>
           {saving&&<span style={{width:15,height:15,border:'2px solid currentColor',borderTopColor:'transparent',borderRadius:'50%',display:'inline-block',animation:'spin .9s linear infinite'}}/>}
-          {saved2?'✓ Salvo!':saving?'Salvando…':'💾 Salvar'}
+          {saved?'✓ Salvo!':saving?'Salvando…':'💾 Salvar'}
         </button>
       </div>
     </div>
@@ -1131,7 +1131,6 @@ function App() {
         {screen==='clientes' && <ClientesScreen cats={cats} onSelectPlate={p=>{setPlate(cleanP(p));setScreen('consulta');doSearch(p);}}/>}
         {screen==='planos'   && <PlanosScreen/>}
         {screen==='modelos'  && <ModelosScreen cats={cats}/>}
-        {screen==='modelos'   && <ModelosScreen cats={cats}/>}
         {screen==='precos'   && <PriceManager cats={cats} onReload={reloadCats}/>}
       </div>
 
