@@ -683,72 +683,177 @@ function PlanosScreen() {
 
 /* ─── MODELOS SCREEN ─────────────────────────────────────── */
 function ModelosScreen({cats}) {
-  const [rows,setRows]=useState([]);
-  const [total,setTotal]=useState(0);
-  const [pages,setPages]=useState(1);
-  const [page,setPage]=useState(1);
-  const [busca,setBusca]=useState('');
-  const [loading,setLoading]=useState(true);
-  const [saving,setSaving]=useState({});
-  const [saved,setSaved]=useState({});
-  const timer=useRef(null);
-  useEffect(()=>{ loadMod(1,''); },[]);
-  async function loadMod(pg,bq) {
+  const SEGMENTOS = [
+    {id:'',   label:'Todos'},
+    {id:'1',  label:'🚗 Automóvel'},
+    {id:'2',  label:'🛻 Utilitário'},
+    {id:'3',  label:'🚛 Caminhão'},
+    {id:'4',  label:'🚍 Ônibus'},
+    {id:'5',  label:'🚜 Máquina'},
+    {id:'6',  label:'🏍️ Moto'},
+    {id:'7',  label:'🔧 Implemento'},
+  ];
+
+  const [rows,       setRows]       = useState([]);
+  const [total,      setTotal]      = useState(0);
+  const [pages,      setPages]      = useState(1);
+  const [page,       setPage]       = useState(1);
+  const [busca,      setBusca]      = useState('');
+  const [catFiltro,  setCatFiltro]  = useState('');   // '' = todas, 'SEM' = sem categoria
+  const [segFiltro,  setSegFiltro]  = useState('');   // '' = todos
+  const [ordem,      setOrdem]      = useState('az'); // az | za | cat
+  const [loading,    setLoading]    = useState(true);
+  const [saving,     setSaving]     = useState({});
+  const [saved,      setSaved]      = useState({});
+  const timer = useRef(null);
+
+  useEffect(()=>{ loadMod(1); },[busca, catFiltro, segFiltro, ordem]);
+
+  async function loadMod(pg) {
     setLoading(true);
-    try{
-      const p=new URLSearchParams({page:pg}); if(bq) p.append('busca',bq);
-      const r=await fetch('/api/modelos?'+p);
-      const d=await r.json();
-      // Garante array mesmo se API retornar objeto ou erro
-      const rowsData = Array.isArray(d?.rows) ? d.rows : Array.isArray(d) ? d : [];
-      setRows(rowsData); setTotal(d?.total||0); setPages(d?.pages||1); setPage(pg);
-    }catch(e){console.error(e);}finally{setLoading(false);}
+    try {
+      const p = new URLSearchParams({page:pg, ordem});
+      if (busca)     p.append('busca',   busca);
+      if (catFiltro) p.append('cat',     catFiltro);
+      if (segFiltro) p.append('seg',     segFiltro);
+      const r = await fetch('/api/modelos?'+p);
+      const d = await r.json();
+      const rowsData = Array.isArray(d?.rows) ? d.rows : [];
+      setRows(rowsData);
+      setTotal(d?.total||0);
+      setPages(d?.pages||1);
+      setPage(pg);
+    } catch(e){console.error(e);}
+    finally{setLoading(false);}
   }
-  function handleBusca(v){ setBusca(v); clearTimeout(timer.current); timer.current=setTimeout(()=>loadMod(1,v),400); }
+
+  function handleBusca(v) {
+    setBusca(v);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(()=>loadMod(1), 400);
+  }
+
   async function handleChange(row, novaCatId) {
-    const subId=row.sub_segmentos?.id||row.fk_sub_segmento;
-    const subNome=row.sub_segmentos?.nome||'';
-    const novaCat=cats[novaCatId];
-    if (!subId||!novaCat) return;
-    const aplicar=subNome ? confirm('Aplicar "'+novaCat.label+'" para TODOS os modelos do grupo "'+subNome+'"?') : true;
+    const subId   = row.sub_segmentos?.id || row.fk_sub_segmento;
+    const subNome = row.sub_segmentos?.nome || '';
+    const novaCat = cats[novaCatId];
+    if (!subId || !novaCat) return;
+    const aplicar = subNome
+      ? confirm('Aplicar "'+novaCat.label+'" para TODOS os modelos do grupo "'+subNome+'"?')
+      : true;
     setRows(prev=>prev.map(x=>{
       if (aplicar ? x.fk_sub_segmento===subId : x.id===row.id)
-        return {...x,sub_segmentos:{...x.sub_segmentos,categoria_id:novaCatId}};
+        return {...x, sub_segmentos:{...x.sub_segmentos, categoria_id:novaCatId}};
       return x;
     }));
     setSaving(s=>({...s,[subId]:true}));
-    try{
-      await fetch('/api/modelos',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({sub_segmento_id:subId,categoria_id:novaCatId})});
+    try {
+      await fetch('/api/modelos',{method:'PATCH',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sub_segmento_id:subId, categoria_id:novaCatId})});
       setSaved(s=>({...s,[subId]:true}));
       setTimeout(()=>setSaved(s=>({...s,[subId]:false})),2000);
-    }catch(e){console.error(e);}finally{setSaving(s=>({...s,[subId]:false}));}
+    } catch(e){console.error(e);}
+    finally{setSaving(s=>({...s,[subId]:false}));}
   }
+
+  const catOptions = [
+    {id:'',    label:'Todas categorias'},
+    {id:'SEM', label:'⚠️ Sem categoria'},
+    ...Object.values(cats).map(c=>({id:c.id, label:c.emoji+' '+c.label})),
+  ];
+
   return (
     <div style={{padding:'14px 16px 88px',maxWidth:640,margin:'0 auto'}}>
+      {/* Header */}
       <div style={{marginBottom:14}}>
         <div style={{fontFamily:'Bebas Neue,cursive',fontSize:28,color:'var(--neon)',letterSpacing:'.05em'}}>MODELOS</div>
-        <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>{total>0?total.toLocaleString('pt-BR')+' modelos':'Carregando…'}{busca?' · "'+busca+'"':''}</div>
+        <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>
+          {loading?'Carregando…':(total.toLocaleString('pt-BR')+' modelos'+(busca?' · "'+busca+'"':''))}
+        </div>
       </div>
-      <input type="text" value={busca} onChange={e=>handleBusca(e.target.value)} placeholder="Buscar modelo... ex: CRETA, GOL, HILUX" className="fi" style={{marginBottom:14}}/>
-      {loading&&<div style={{textAlign:'center',padding:'32px',color:'var(--dim)'}}><div style={{display:'flex',justifyContent:'center',gap:7,marginBottom:8}}>{[0,180,360].map(d=>(<div key={d} className="blink" style={{width:8,height:8,borderRadius:'50%',background:'var(--neon)',animationDelay:d+'ms'}}/>))}</div>Carregando…</div>}
-      {!loading&&rows.length===0&&<div style={{textAlign:'center',padding:'48px 0'}}><div style={{fontSize:40,opacity:.18,marginBottom:10}}>🔍</div><div style={{fontSize:14,color:'var(--dim)'}}>Nenhum modelo encontrado</div></div>}
+
+      {/* Busca */}
+      <input type="text" value={busca} onChange={e=>handleBusca(e.target.value)}
+        placeholder="🔍 Buscar modelo... ex: CRETA, GOL, HILUX"
+        className="fi" style={{marginBottom:10}}/>
+
+      {/* Filtros em linha */}
+      <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap'}}>
+        {/* Filtro categoria */}
+        <select value={catFiltro} onChange={e=>{setCatFiltro(e.target.value);}}
+          style={{flex:1,minWidth:120,background:'var(--s2)',border:'1px solid rgba(255,255,255,.12)',borderRadius:8,padding:'7px 10px',fontSize:12,color:'var(--txt)',outline:'none',cursor:'pointer'}}>
+          {catOptions.map(o=>(<option key={o.id} value={o.id}>{o.label}</option>))}
+        </select>
+
+        {/* Filtro segmento */}
+        <select value={segFiltro} onChange={e=>{setSegFiltro(e.target.value);}}
+          style={{flex:1,minWidth:110,background:'var(--s2)',border:'1px solid rgba(255,255,255,.12)',borderRadius:8,padding:'7px 10px',fontSize:12,color:'var(--txt)',outline:'none',cursor:'pointer'}}>
+          {SEGMENTOS.map(o=>(<option key={o.id} value={o.id}>{o.label}</option>))}
+        </select>
+
+        {/* Ordenação */}
+        <select value={ordem} onChange={e=>{setOrdem(e.target.value);}}
+          style={{background:'var(--s2)',border:'1px solid rgba(255,255,255,.12)',borderRadius:8,padding:'7px 10px',fontSize:12,color:'var(--txt)',outline:'none',cursor:'pointer'}}>
+          <option value="az">A → Z</option>
+          <option value="za">Z → A</option>
+          <option value="cat">Por categoria</option>
+        </select>
+      </div>
+
+      {/* Chips de filtros ativos */}
+      {(catFiltro||segFiltro||busca)&&(
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+          {busca&&<span onClick={()=>setBusca('')} className="chip chip-blue" style={{cursor:'pointer'}}>🔍 "{busca}" ✕</span>}
+          {catFiltro&&<span onClick={()=>setCatFiltro('')} className="chip chip-yellow" style={{cursor:'pointer'}}>{catOptions.find(c=>c.id===catFiltro)?.label} ✕</span>}
+          {segFiltro&&<span onClick={()=>setSegFiltro('')} className="chip chip-blue" style={{cursor:'pointer'}}>{SEGMENTOS.find(sg=>sg.id===segFiltro)?.label} ✕</span>}
+          <span onClick={()=>{setBusca('');setCatFiltro('');setSegFiltro('');}} style={{fontSize:11,color:'var(--dim)',cursor:'pointer',padding:'2px 8px',borderRadius:20,border:'1px solid rgba(255,255,255,.08)'}}>Limpar tudo</span>
+        </div>
+      )}
+
+      {/* Loading */}
+      {loading&&(
+        <div style={{textAlign:'center',padding:'32px',color:'var(--dim)'}}>
+          <div style={{display:'flex',justifyContent:'center',gap:7,marginBottom:8}}>
+            {[0,180,360].map(d=>(<div key={d} className="blink" style={{width:8,height:8,borderRadius:'50%',background:'var(--neon)',animationDelay:d+'ms'}}/>))}
+          </div>
+          Carregando…
+        </div>
+      )}
+
+      {/* Vazio */}
+      {!loading&&rows.length===0&&(
+        <div style={{textAlign:'center',padding:'48px 0'}}>
+          <div style={{fontSize:40,opacity:.18,marginBottom:10}}>🔍</div>
+          <div style={{fontSize:14,color:'var(--dim)'}}>Nenhum modelo encontrado</div>
+          {(busca||catFiltro||segFiltro)&&(
+            <button onClick={()=>{setBusca('');setCatFiltro('');setSegFiltro('');}}
+              style={{marginTop:12,padding:'8px 16px',borderRadius:8,fontSize:12,cursor:'pointer',background:'rgba(0,229,255,.1)',border:'1px solid rgba(0,229,255,.25)',color:'var(--neon)'}}>
+              Limpar filtros
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Lista */}
       <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:16}}>
         {rows.map(row=>{
-          const subId=row.sub_segmentos?.id||row.fk_sub_segmento;
-          const catId=row.sub_segmentos?.categoria_id;
-          const cat=catId&&cats[catId];
+          const subId   = row.sub_segmentos?.id || row.fk_sub_segmento;
+          const catId   = row.sub_segmentos?.categoria_id;
+          const cat     = catId && cats[catId];
           return (
-            <div key={row.id} style={{background:'var(--s1)',border:'1px solid '+(cat?cat.color+'28':'var(--bdr)'),borderRadius:10,padding:'10px 14px',display:'flex',alignItems:'center',gap:10}}>
-              <span style={{fontSize:20,flexShrink:0}}>{cat?.emoji||'🚗'}</span>
+            <div key={row.id} style={{background:'var(--s1)',border:'1px solid '+(cat?cat.color+'28':'rgba(255,193,7,.15)'),borderRadius:10,padding:'10px 14px',display:'flex',alignItems:'center',gap:10}}>
+              <span style={{fontSize:20,flexShrink:0}}>{cat?.emoji||'❓'}</span>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:13,fontWeight:600,color:'var(--txt)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{row.modelo}</div>
-                {row.sub_segmentos?.nome&&<div style={{fontSize:11,color:'var(--dim)',marginTop:1}}>📂 {row.sub_segmentos.nome}</div>}
+                {row.sub_segmentos?.nome&&(
+                  <div style={{fontSize:11,color:'var(--dim)',marginTop:1}}>📂 {row.sub_segmentos.nome}</div>
+                )}
               </div>
               <div style={{display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
                 {saved[subId]&&<span style={{fontSize:14,color:'#4caf50'}}>✓</span>}
                 {saving[subId]&&<span style={{width:12,height:12,border:'2px solid var(--neon)',borderTopColor:'transparent',borderRadius:'50%',display:'inline-block',animation:'spin .9s linear infinite'}}/>}
                 <select value={catId||''} onChange={e=>handleChange(row,e.target.value)}
-                  style={{background:'var(--s2)',border:'1px solid '+(cat?cat.color+'60':'rgba(255,255,255,.15)'),borderRadius:7,padding:'5px 8px',fontSize:12,fontWeight:600,color:cat?cat.color:'var(--dim)',outline:'none',cursor:'pointer',maxWidth:130}}>
+                  style={{background:'var(--s2)',border:'1px solid '+(cat?cat.color+'60':'rgba(255,193,7,.4)'),borderRadius:7,padding:'5px 8px',fontSize:12,fontWeight:600,color:cat?cat.color:'#ffc107',outline:'none',cursor:'pointer',maxWidth:130}}>
                   <option value="">— sem cat —</option>
                   {Object.values(cats).map(c=>(<option key={c.id} value={c.id}>{c.emoji} {c.label}</option>))}
                 </select>
@@ -757,14 +862,26 @@ function ModelosScreen({cats}) {
           );
         })}
       </div>
-      {pages>1&&<div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:10}}><button onClick={()=>loadMod(Math.max(1,page-1),busca)} disabled={page===1||loading} style={{padding:'8px 16px',borderRadius:8,fontSize:13,cursor:page===1?'not-allowed':'pointer',opacity:page===1?.4:1,background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.1)',color:'var(--dim)'}}>← Anterior</button><span style={{fontSize:12,color:'var(--dim)'}}>{page} / {pages} · {total.toLocaleString('pt-BR')}</span><button onClick={()=>loadMod(Math.min(pages,page+1),busca)} disabled={page===pages||loading} style={{padding:'8px 16px',borderRadius:8,fontSize:13,cursor:page===pages?'not-allowed':'pointer',opacity:page===pages?.4:1,background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.1)',color:'var(--dim)'}}>Próxima →</button></div>}
+
+      {/* Paginação */}
+      {pages>1&&(
+        <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:10}}>
+          <button onClick={()=>loadMod(Math.max(1,page-1))} disabled={page===1||loading}
+            style={{padding:'8px 16px',borderRadius:8,fontSize:13,cursor:page===1?'not-allowed':'pointer',opacity:page===1?.4:1,background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.1)',color:'var(--dim)'}}>
+            ← Anterior
+          </button>
+          <span style={{fontSize:12,color:'var(--dim)'}}>{page} / {pages} · {total.toLocaleString('pt-BR')}</span>
+          <button onClick={()=>loadMod(Math.min(pages,page+1))} disabled={page===pages||loading}
+            style={{padding:'8px 16px',borderRadius:8,fontSize:13,cursor:page===pages?'not-allowed':'pointer',opacity:page===pages?.4:1,background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.1)',color:'var(--dim)'}}>
+            Próxima →
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
 
-const EMOJIS=['🚗','🚙','🚐','🛻','🚌','🚛','🚍','🏍️','🚕','🚑','🏎️','⚡','🔧','🚜'];
-const CORES=['#00e5ff','#ccff00','#7c4dff','#ff6b35','#ff4081','#ff9800','#f44336','#009688','#4caf50','#e91e63','#3f51b5','#ff5722'];
 
 function PriceManager({cats, onReload}) {
   const [showForm, setShowForm] = useState(false);
