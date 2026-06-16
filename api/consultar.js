@@ -1,7 +1,5 @@
 const { URL } = require('url');
 
-// Handler original (Netlify format)
-const { URL } = require('url');
 
 // Handler original Netlify
 /**
@@ -240,28 +238,6 @@ exports.handler = async (event) => {
 
 
 // Adaptador Vercel
-module.exports = async (req, res) => {
-  // Monta evento no formato Netlify
-  const event = {
-    httpMethod: req.method,
-    queryStringParameters: Object.fromEntries(
-      new URL(req.url, 'http://localhost').searchParams.entries()
-    ),
-    headers: req.headers,
-    body: await new Promise(resolve => {
-      let data = '';
-      req.on('data', chunk => data += chunk);
-      req.on('end', () => resolve(data || null));
-    }),
-  };
-
-  const result = await exports.handler(event);
-
-  // Aplica headers
-  Object.entries(result.headers || {}).forEach(([k, v]) => res.setHeader(k, v));
-  res.status(result.statusCode || 200).send(result.body || '');
-};
-
 
 // Adaptador Vercel
 module.exports = async (req, res) => {
