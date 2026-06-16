@@ -1,6 +1,3 @@
-const { URL } = require('url');
-
-// Handler original (Netlify format)
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const sbH = (e={}) => ({ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`, 'Content-Type':'application/json', ...e });
@@ -30,19 +27,4 @@ exports.handler = async (event) => {
   }
 
   return { statusCode:405, headers, body:'{}' };
-};
-
-
-// Adaptador Vercel
-module.exports = async (req, res) => {
-  const qs = Object.fromEntries(new URL(req.url, 'http://x').searchParams.entries());
-  const event = {
-    httpMethod: req.method,
-    queryStringParameters: qs,
-    headers: req.headers,
-    body: await new Promise(ok => { let d=''; req.on('data',c=>d+=c); req.on('end',()=>ok(d||null)); }),
-  };
-  const result = await exports.handler(event);
-  Object.entries(result.headers||{}).forEach(([k,v])=>res.setHeader(k,v));
-  res.status(result.statusCode||200).send(result.body||'');
 };

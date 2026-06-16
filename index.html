@@ -10,6 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
 :root{--neon:#00e5ff;--acid:#ccff00;--bg:#070b0f;--s1:#0c1218;--s2:#111920;--bdr:rgba(0,229,255,0.13);--txt:#e4f2f8;--dim:#526a78;}
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -69,7 +70,7 @@ function rowToCat(r) {
 
 async function fetchCategorias() {
   try {
-    const r = await fetch('/api/categorias');
+    const r = await fetch('/.netlify/functions/categorias');
     if (!r.ok) throw new Error('HTTP '+r.status);
     const rows = await r.json();
     if (!Array.isArray(rows)||!rows.length) throw new Error('vazio');
@@ -103,7 +104,7 @@ const fmtDisp = p => { const c=cleanP(p); return c.length>3?c.slice(0,3)+'-'+c.s
 /* ─── API PLACA ─────────────────────────────────────────────── */
 async function consultarPlaca(placa) {
   const p   = cleanP(placa);
-  const res = await fetch('/api/consultar',{
+  const res = await fetch('/.netlify/functions/consultar',{
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({placa:p}), signal: AbortSignal.timeout(12000),
   });
@@ -130,6 +131,144 @@ async function consultarPlaca(placa) {
 /* ─── HISTORICO LOCAL ───────────────────────────────────────── */
 function loadHist()  { try{return JSON.parse(localStorage.getItem('pw_hist')||'[]');}catch{return [];} }
 function saveHist(h) { try{localStorage.setItem('pw_hist',JSON.stringify(h));}catch{} }
+
+
+/* ─── SUPABASE AUTH ─────────────────────────────────────── */
+const SUPA_URL = 'https://axcxonbdovbjcqrkvamy.supabase.co';
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF4Y3hvbmJkb3ZiamNxcmt2YW15Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk3NDU5NzYsImV4cCI6MjA5NTMyMTk3Nn0.KOAar93bi3AEMJR7S7cYyBZluY2YuhzIFAO3Qg19jF0';
+const supabase = window.supabase.createClient(SUPA_URL, SUPA_KEY);
+
+function LoginScreen() {
+  const [loading, setLoading] = useState(false);
+  const [erro,    setErro]    = useState('');
+  async function loginGoogle() {
+    setLoading(true); setErro('');
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: window.location.origin },
+      });
+      if (error) setErro(error.message);
+    } catch(e) { setErro(e.message); }
+    finally { setLoading(false); }
+  }
+  return (
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)',padding:24}}>
+      <div style={{width:'100%',maxWidth:380,textAlign:'center'}}>
+        <div style={{marginBottom:40}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:12,marginBottom:8}}>
+            <span style={{fontSize:40}}>💧</span>
+            <h1 style={{fontFamily:'Bebas Neue,cursive',fontSize:52,color:'var(--neon)',letterSpacing:'.1em',textShadow:'0 0 20px rgba(0,229,255,.6)'}}>PLACAWASH</h1>
+          </div>
+          <p style={{fontSize:14,color:'var(--dim)'}}>Gestão inteligente para lava-jatos</p>
+        </div>
+        <div style={{background:'var(--s1)',border:'1px solid var(--bdr)',borderRadius:20,padding:32}}>
+          <div style={{marginBottom:24}}>
+            <div style={{fontSize:18,fontWeight:700,color:'var(--txt)',marginBottom:6}}>Entrar na sua conta</div>
+            <div style={{fontSize:13,color:'var(--dim)'}}>Acesse para gerenciar seu lava-jato</div>
+          </div>
+          <button onClick={loginGoogle} disabled={loading} style={{width:'100%',padding:'14px 20px',borderRadius:12,fontSize:15,fontWeight:600,cursor:loading?'not-allowed':'pointer',opacity:loading?.7:1,display:'flex',alignItems:'center',justifyContent:'center',gap:12,background:'white',border:'none',color:'#1a1a1a',marginBottom:16}}>
+            {loading
+              ? <span style={{width:20,height:20,border:'2px solid #666',borderTopColor:'transparent',borderRadius:'50%',display:'inline-block',animation:'spin .9s linear infinite'}}/>
+              : <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+            }
+            {loading ? 'Conectando…' : 'Continuar com Google'}
+          </button>
+          {erro&&<div style={{padding:'10px 14px',borderRadius:8,background:'rgba(244,67,54,.1)',border:'1px solid rgba(244,67,54,.3)',color:'#f44336',fontSize:12}}>{erro}</div>}
+          <div style={{fontSize:11,color:'var(--dim)',lineHeight:1.6,marginTop:20,paddingTop:20,borderTop:'1px solid rgba(255,255,255,.06)'}}>
+            Ao entrar você concorda com os Termos de Uso e Política de Privacidade.
+          </div>
+        </div>
+        <div style={{marginTop:24,fontSize:13,color:'var(--dim)'}}>💧 PlacaWash · R$ 37,70/mês</div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ─── GAMIFICAÇÃO ───────────────────────────────────────── */
+async function fetchGamificacao() {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return null;
+    const r = await fetch('/api/gamificacao?action=resumo', {
+      headers: { Authorization: 'Bearer '+session.access_token },
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch(e) { console.error('[gamif]', e); return null; }
+}
+
+async function checkinGamificacao() {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return null;
+    const r = await fetch('/api/gamificacao?action=checkin', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer '+session.access_token },
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch(e) { console.error('[checkin]', e); return null; }
+}
+
+function StreakBar({gamif, onRefresh}) {
+  if (!gamif) return null;
+  const { streak, metaHoje, progressoHoje, totalHoje } = gamif;
+  const pct = metaHoje>0 ? Math.min(100, Math.round(progressoHoje/metaHoje*100)) : 0;
+  const bateu = progressoHoje >= metaHoje;
+
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',borderRadius:12,marginBottom:14,
+      background: bateu ? 'linear-gradient(135deg,rgba(76,175,80,.12),rgba(76,175,80,.04))' : 'var(--s1)',
+      border: `1px solid ${bateu ? 'rgba(76,175,80,.3)' : 'var(--bdr)'}`}}>
+
+      {/* Streak */}
+      <div style={{display:'flex',alignItems:'center',gap:5,flexShrink:0}}>
+        <span style={{fontSize:20}}>{streak>0?'🔥':'💧'}</span>
+        <div>
+          <div style={{fontFamily:'Bebas Neue,cursive',fontSize:20,color:streak>0?'#ff9800':'var(--dim)',lineHeight:1}}>{streak}</div>
+          <div style={{fontSize:9,color:'var(--dim)'}}>{streak===1?'dia':'dias'}</div>
+        </div>
+      </div>
+
+      <div style={{width:1,height:32,background:'rgba(255,255,255,.1)',flexShrink:0}}/>
+
+      {/* Meta do dia */}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:3}}>
+          <span style={{fontSize:11,color:'var(--dim)'}}>Meta de hoje</span>
+          <span style={{fontSize:12,fontWeight:700,color:bateu?'#4caf50':'var(--txt)'}}>{progressoHoje}/{metaHoje} {bateu&&'🎉'}</span>
+        </div>
+        <div style={{height:6,background:'rgba(255,255,255,.06)',borderRadius:3,overflow:'hidden'}}>
+          <div style={{height:'100%',width:pct+'%',background:bateu?'#4caf50':'var(--neon)',borderRadius:3,transition:'width .5s'}}/>
+        </div>
+      </div>
+
+      {/* Total do dia */}
+      <div style={{textAlign:'right',flexShrink:0}}>
+        <div style={{fontFamily:'Bebas Neue,cursive',fontSize:18,color:'var(--acid)',lineHeight:1}}>R${totalHoje}</div>
+        <div style={{fontSize:9,color:'var(--dim)'}}>hoje</div>
+      </div>
+    </div>
+  );
+}
+
+function ConquistaToast({conquista, onClose}) {
+  useEffect(()=>{ const t=setTimeout(onClose, 4000); return ()=>clearTimeout(t); },[]);
+  return (
+    <div className="up" style={{position:'fixed',top:16,left:16,right:16,zIndex:80,maxWidth:400,margin:'0 auto',
+      background:'linear-gradient(135deg,rgba(255,193,7,.95),rgba(255,152,0,.95))',borderRadius:14,padding:'14px 18px',
+      display:'flex',alignItems:'center',gap:12,boxShadow:'0 8px 24px rgba(0,0,0,.4)'}}>
+      <span style={{fontSize:32}}>{conquista.emoji}</span>
+      <div style={{flex:1}}>
+        <div style={{fontSize:11,color:'rgba(0,0,0,.6)',fontWeight:600,textTransform:'uppercase'}}>Conquista desbloqueada!</div>
+        <div style={{fontSize:15,fontWeight:700,color:'#1a1a1a'}}>{conquista.label}</div>
+      </div>
+      <button onClick={onClose} style={{background:'none',border:'none',color:'rgba(0,0,0,.5)',cursor:'pointer',fontSize:18}}>✕</button>
+    </div>
+  );
+}
 
 /* ─── CATCARD ───────────────────────────────────────────────── */
 function CatCard({cat, isManual, subSegNome, onEdit}) {
@@ -205,7 +344,7 @@ function EditCatModal({data, catAtual, cats, onClose, onSaved}) {
     if (!sel||sel===catAtual?.id){onClose();return;}
     setSaving(true);
     try{
-      await fetch('/api/atualizar',{method:'POST',headers:{'Content-Type':'application/json'},
+      await fetch('/.netlify/functions/atualizar',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({placa:data.placa,categoriaId:sel,marca:data.marca,modelo:data.modelo})});
       setSaved(true);
       setTimeout(()=>{onSaved(cats[sel]||CAT_FB[sel]);onClose();},900);
@@ -311,14 +450,14 @@ function BuscaCliente({placa, onSelect}) {
   const timer = useRef(null);
   useEffect(()=>{
     if (!placa) return;
-    fetch('/api/clientes?placa='+placa).then(r=>r.ok?r.json():null).then(c=>{ if(c) onSelect(c); }).catch(()=>{});
+    fetch('/.netlify/functions/clientes?placa='+placa).then(r=>r.ok?r.json():null).then(c=>{ if(c) onSelect(c); }).catch(()=>{});
   },[placa]);
   function handleSearch(v) {
     setQuery(v); clearTimeout(timer.current);
     if (!v.trim()){setResults([]);return;}
     timer.current=setTimeout(async()=>{
       setLoading(true);
-      try{ const r=await fetch('/api/clientes?busca='+encodeURIComponent(v)); const d=await r.json(); setResults(d.rows||[]); }
+      try{ const r=await fetch('/.netlify/functions/clientes?busca='+encodeURIComponent(v)); const d=await r.json(); setResults(d.rows||[]); }
       catch(e){} finally{setLoading(false);}
     },400);
   }
@@ -359,10 +498,10 @@ function NovaOSModal({data, cats, onClose, onSaved}) {
       const nome=nomeNovo.trim(); const tel=telNovo.replace(/\D/g,'');
       let cId=clienteSel?.id||null;
       if (nome||tel) {
-        if (cId) { await fetch('/api/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:cId,nome:nome||clienteSel.nome,telefone:tel,placas:[...new Set([...(clienteSel.placas||[]),data.placa])]})}); }
-        else { const rc=await fetch('/api/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome:nome||'Cliente '+fmtDisp(data.placa),telefone:tel,placas:[data.placa]})}); const nc=await rc.json(); cId=nc?.id||null; }
+        if (cId) { await fetch('/.netlify/functions/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:cId,nome:nome||clienteSel.nome,telefone:tel,placas:[...new Set([...(clienteSel.placas||[]),data.placa])]})}); }
+        else { const rc=await fetch('/.netlify/functions/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome:nome||'Cliente '+fmtDisp(data.placa),telefone:tel,placas:[data.placa]})}); const nc=await rc.json(); cId=nc?.id||null; }
       }
-      await fetch('/api/os',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({placa:data.placa,marca:data.marca,modelo:data.modelo,cor:data.cor,categoria_id:data.categoria_id,servico,valor,obs,telefone:tel,cliente_id:cId})});
+      await fetch('/.netlify/functions/os',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({placa:data.placa,marca:data.marca,modelo:data.modelo,cor:data.cor,categoria_id:data.categoria_id,servico,valor,obs,telefone:tel,cliente_id:cId})});
       if (tel) enviarWhats('entrada',{telefone:tel,placa:data.placa,marca:data.marca,modelo:data.modelo,cor:data.cor,servico,valor});
       onSaved();
     } catch(e){console.error(e);} finally{setSaving(false);}
@@ -420,20 +559,20 @@ function OSScreen({cats}) {
   const timer = useRef(null);
   useEffect(()=>{ fetchOs(); timer.current=setInterval(fetchOs,30000); return()=>clearInterval(timer.current); },[]);
   async function fetchOs() {
-    try{ const r=await fetch('/api/os?action=fila'); if(!r.ok)return; const d=await r.json(); setOs(d.rows||[]); }
+    try{ const r=await fetch('/.netlify/functions/os?action=fila'); if(!r.ok)return; const d=await r.json(); setOs(d.rows||[]); }
     catch(e){console.error(e);} finally{setLoading(false);}
   }
   async function avancar(item, novoStatus) {
     setUpd(u=>({...u,[item.id]:true}));
     try{
-      await fetch('/api/os?id='+item.id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:novoStatus})});
+      await fetch('/.netlify/functions/os?id='+item.id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:novoStatus})});
       setOs(o=>o.map(x=>x.id===item.id?{...x,status:novoStatus}:x));
       if (novoStatus==='pronto'&&item.telefone) enviarWhats('saida',{telefone:item.telefone,placa:item.placa,marca:item.marca,modelo:item.modelo,cor:item.cor,servico:item.servico,valor:item.valor});
     }catch(e){console.error(e);} finally{setUpd(u=>({...u,[item.id]:false}));}
   }
   async function cancelar(id) {
     if (!confirm('Cancelar esta OS?')) return;
-    await fetch('/api/os?id='+id,{method:'DELETE'});
+    await fetch('/.netlify/functions/os?id='+id,{method:'DELETE'});
     setOs(o=>o.map(x=>x.id===id?{...x,status:'cancelado'}:x));
   }
   const ativos     = os.filter(o=>['aguardando','em_lavagem'].includes(o.status));
@@ -514,7 +653,7 @@ function CaixaScreen({cats}) {
   useEffect(()=>{ fetchCaixa(); },[data]);
   async function fetchCaixa() {
     setLoading(true);
-    try{ const r=await fetch('/api/os?action=caixa&data='+data); if(!r.ok)return; setCaixa(await r.json()); }
+    try{ const r=await fetch('/.netlify/functions/os?action=caixa&data='+data); if(!r.ok)return; setCaixa(await r.json()); }
     catch(e){console.error(e);} finally{setLoading(false);}
   }
   return (
@@ -556,11 +695,11 @@ function ClientesScreen({cats, onSelectPlate}) {
   useEffect(()=>{ fetchCli(''); },[]);
   async function fetchCli(q) {
     setLoading(true);
-    try{ const r=await fetch(q?'/api/clientes?busca='+encodeURIComponent(q):'/api/clientes'); const d=await r.json(); setClientes(d.rows||[]); }
+    try{ const r=await fetch(q?'/.netlify/functions/clientes?busca='+encodeURIComponent(q):'/.netlify/functions/clientes'); const d=await r.json(); setClientes(d.rows||[]); }
     catch(e){console.error(e);} finally{setLoading(false);}
   }
   function handleBusca(v){ setBusca(v); clearTimeout(timer.current); timer.current=setTimeout(()=>fetchCli(v),400); }
-  async function deletar(id){ if(!confirm('Remover?'))return; await fetch('/api/clientes?id='+id,{method:'DELETE'}); setClientes(c=>c.filter(x=>x.id!==id)); }
+  async function deletar(id){ if(!confirm('Remover?'))return; await fetch('/.netlify/functions/clientes?id='+id,{method:'DELETE'}); setClientes(c=>c.filter(x=>x.id!==id)); }
   return (
     <div style={{padding:'14px 16px 88px',maxWidth:640,margin:'0 auto'}}>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
@@ -608,7 +747,7 @@ function ClienteFormModal({inicial, onClose, onSaved}) {
     if (!form.nome) return; setSaving(true);
     try{
       const placas=form.placas.split(',').map(p=>p.trim().replace(/[^A-Z0-9]/gi,'').toUpperCase()).filter(Boolean);
-      await fetch('/api/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:inicial?.id,nome:form.nome,telefone:form.telefone.replace(/\D/g,''),placas,obs:form.obs})});
+      await fetch('/.netlify/functions/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:inicial?.id,nome:form.nome,telefone:form.telefone.replace(/\D/g,''),placas,obs:form.obs})});
       onSaved();
     }catch(e){console.error(e);} finally{setSaving(false);}
   }
@@ -642,9 +781,9 @@ function PlanosScreen() {
   const [form,setForm]=useState({nome:'',qtd_lavagens:8,valor:0,servico:'simples',descricao:''});
   const sf=(k,v)=>setForm(f=>({...f,[k]:v}));
   useEffect(()=>{ fetchPl(); },[]);
-  async function fetchPl(){ setLoading(true); try{ const r=await fetch('/api/planos'); setPlanos(await r.json()||[]); }catch(e){console.error(e);}finally{setLoading(false);} }
-  async function salvarPl(){ if(!form.nome||!form.valor)return; setSaving(true); try{ await fetch('/api/planos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)}); await fetchPl(); setShowForm(false); setForm({nome:'',qtd_lavagens:8,valor:0,servico:'simples',descricao:''}); }catch(e){console.error(e);}finally{setSaving(false);} }
-  async function deletarPl(id){ if(!confirm('Remover plano?'))return; await fetch('/api/planos?id='+id,{method:'DELETE'}); setPlanos(p=>p.filter(x=>x.id!==id)); }
+  async function fetchPl(){ setLoading(true); try{ const r=await fetch('/.netlify/functions/planos'); setPlanos(await r.json()||[]); }catch(e){console.error(e);}finally{setLoading(false);} }
+  async function salvarPl(){ if(!form.nome||!form.valor)return; setSaving(true); try{ await fetch('/.netlify/functions/planos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)}); await fetchPl(); setShowForm(false); setForm({nome:'',qtd_lavagens:8,valor:0,servico:'simples',descricao:''}); }catch(e){console.error(e);}finally{setSaving(false);} }
+  async function deletarPl(id){ if(!confirm('Remover plano?'))return; await fetch('/.netlify/functions/planos?id='+id,{method:'DELETE'}); setPlanos(p=>p.filter(x=>x.id!==id)); }
   return (
     <div style={{padding:'14px 16px 88px',maxWidth:640,margin:'0 auto'}}>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
@@ -716,7 +855,7 @@ function ModelosScreen({cats}) {
       if (busca)     p.append('busca',   busca);
       if (catFiltro) p.append('cat',     catFiltro);
       if (segFiltro) p.append('seg',     segFiltro);
-      const r = await fetch('/api/modelos?'+p);
+      const r = await fetch('/.netlify/functions/modelos?'+p);
       const d = await r.json();
       const rowsData = Array.isArray(d?.rows) ? d.rows : [];
       setRows(rowsData);
@@ -748,7 +887,7 @@ function ModelosScreen({cats}) {
     }));
     setSaving(s=>({...s,[subId]:true}));
     try {
-      await fetch('/api/modelos',{method:'PATCH',headers:{'Content-Type':'application/json'},
+      await fetch('/.netlify/functions/modelos',{method:'PATCH',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({sub_segmento_id:subId, categoria_id:novaCatId})});
       setSaved(s=>({...s,[subId]:true}));
       setTimeout(()=>setSaved(s=>({...s,[subId]:false})),2000);
@@ -892,7 +1031,7 @@ function PriceManager({cats, onReload}) {
   async function saveCat(data) {
     setSaving(s=>({...s,[data.id]:true}));
     try{
-      await fetch('/api/categorias',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      await fetch('/.netlify/functions/categorias',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
       await onReload(); setShowForm(false); setEditando(null);
     }catch(e){console.error(e);}finally{setSaving(s=>({...s,[data.id]:false}));}
   }
@@ -996,7 +1135,11 @@ function CatFormModal({inicial, saving, onClose, onSave, idsExistentes}) {
 
 /* ─── APP ───────────────────────────────────────────────────── */
 function App() {
-  const [cats,     setCats]     = useState(CAT_FB);
+  const [user,        setUser]        = useState(null);
+  const [gamif,       setGamif]       = useState(null);
+  const [novaConquista, setNovaConquista] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [cats,        setCats]        = useState(CAT_FB);
   const [historico,setHistorico]= useState(loadHist);
   const [screen,   setScreen]   = useState('consulta');
   const [plate,    setPlate]    = useState('');
@@ -1007,10 +1150,21 @@ function App() {
   const [osData,   setOsData]   = useState(null);
   const inputRef = useRef(null);
 
-  // Carrega categorias do Supabase
   useEffect(()=>{
-    fetchCategorias().then(data=>{ if(data) setCats(data); });
+    supabase.auth.getSession().then(({data:{session}})=>{
+      setUser(session?.user||null); setAuthLoading(false);
+    });
+    const {data:{subscription}} = supabase.auth.onAuthStateChange((_,session)=>{
+      setUser(session?.user||null);
+    });
+    return ()=>subscription.unsubscribe();
   },[]);
+
+  useEffect(()=>{
+    if (!user) return;
+    fetchCategorias().then(data=>{ if(data) setCats(data); });
+    fetchGamificacao().then(setGamif);
+  },[user]);
 
   async function reloadCats() {
     const data = await fetchCategorias();
@@ -1048,7 +1202,16 @@ function App() {
   const fmt  = plate.length===7?fmtLbl(plate):null;
   const pd   = fmtDisp(plate);
 
-  return (
+    if (authLoading) return (
+      <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--bg)'}}>
+        <div style={{textAlign:'center'}}>
+          <div style={{fontFamily:'Bebas Neue,cursive',fontSize:42,color:'var(--neon)',letterSpacing:'.1em',marginBottom:16}}>💧 PLACAWASH</div>
+          <div style={{display:'flex',justifyContent:'center',gap:7}}>{[0,180,360].map(d=>(<div key={d} className="blink" style={{width:10,height:10,borderRadius:'50%',background:'var(--neon)',animationDelay:d+'ms'}}/>))}</div>
+        </div>
+      </div>
+    );
+    if (!user) return <LoginScreen/>;
+    return (
     <div className="grid-bg" style={{minHeight:'100vh',display:'flex',flexDirection:'column'}}>
       <div style={{position:'fixed',top:0,left:'50%',transform:'translateX(-50%)',width:'500px',height:'220px',borderRadius:'50%',opacity:.07,filter:'blur(70px)',background:'radial-gradient(ellipse,#00e5ff,transparent 70%)',pointerEvents:'none',zIndex:0}}/>
       <nav className="nav">
@@ -1057,6 +1220,7 @@ function App() {
             <span style={{fontSize:18}}>{ic}</span><span>{lb}</span>
           </button>
         ))}
+        <button onClick={()=>supabase.auth.signOut()} style={{padding:'6px 10px',margin:'auto 6px auto',borderRadius:7,background:'rgba(244,67,54,.08)',border:'1px solid rgba(244,67,54,.2)',color:'#f44336',cursor:'pointer',fontSize:11,fontWeight:600,flexShrink:0,alignSelf:'center'}}>Sair</button>
       </nav>
       <div style={{position:'relative',zIndex:1,flex:1}}>
 
@@ -1070,6 +1234,8 @@ function App() {
               </div>
               <p style={{fontSize:12,color:'var(--dim)'}}>Identifique veículos pela placa e precifique a lavagem</p>
             </header>
+
+            <StreakBar gamif={gamif}/>
             <div className="plate-wrap neon-glow" style={{marginBottom:11,overflow:'hidden',position:'relative'}}>
               {loading&&<div className="scan"/>}
               <div style={{display:'flex',alignItems:'center',padding:'18px 22px',gap:12}}>
@@ -1143,8 +1309,28 @@ function App() {
         }}/>
       )}
       {modal==='novaOS'&&osData&&(
-        <NovaOSModal data={osData} cats={cats} onClose={()=>setModal(null)} onSaved={()=>{setModal(null);setScreen('os');}}/>
+        <NovaOSModal data={osData} cats={cats} onClose={()=>setModal(null)} onSaved={()=>{
+          setModal(null); setScreen('os');
+          checkinGamificacao().then(r=>{
+            if (r?.novo && r.streak>1) {
+              setNovaConquista({id:'streak', emoji:'🔥', label:r.streak+' dias seguidos!'});
+            }
+          });
+          fetchGamificacao().then(g=>{
+            if (g) {
+              // Detecta nova conquista comparando com estado anterior
+              setGamif(prev=>{
+                if (prev && g.conquistas.length > prev.conquistas.length) {
+                  const nova = g.conquistas[g.conquistas.length-1];
+                  setTimeout(()=>setNovaConquista(nova), 1200);
+                }
+                return g;
+              });
+            }
+          });
+        }}/>
       )}
+      {novaConquista&&<ConquistaToast conquista={novaConquista} onClose={()=>setNovaConquista(null)}/>}
       {modal==='editCat'&&result&&(
         <EditCatModal data={result.data} catAtual={result.cat} cats={cats}
           onClose={()=>setModal(null)}

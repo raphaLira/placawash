@@ -1,8 +1,5 @@
 const { URL } = require('url');
 
-// Handler original (Netlify format)
-const { URL } = require('url');
-
 // Handler original Netlify
 /**
  * Netlify Function — consultar
@@ -260,19 +257,4 @@ module.exports = async (req, res) => {
   // Aplica headers
   Object.entries(result.headers || {}).forEach(([k, v]) => res.setHeader(k, v));
   res.status(result.statusCode || 200).send(result.body || '');
-};
-
-
-// Adaptador Vercel
-module.exports = async (req, res) => {
-  const qs = Object.fromEntries(new URL(req.url, 'http://x').searchParams.entries());
-  const event = {
-    httpMethod: req.method,
-    queryStringParameters: qs,
-    headers: req.headers,
-    body: await new Promise(ok => { let d=''; req.on('data',c=>d+=c); req.on('end',()=>ok(d||null)); }),
-  };
-  const result = await exports.handler(event);
-  Object.entries(result.headers||{}).forEach(([k,v])=>res.setHeader(k,v));
-  res.status(result.statusCode||200).send(result.body||'');
 };
