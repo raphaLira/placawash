@@ -70,7 +70,7 @@ function rowToCat(r) {
 
 async function fetchCategorias() {
   try {
-    const r = await fetch('/.netlify/functions/categorias');
+    const r = await fetch('/api/categorias');
     if (!r.ok) throw new Error('HTTP '+r.status);
     const rows = await r.json();
     if (!Array.isArray(rows)||!rows.length) throw new Error('vazio');
@@ -104,7 +104,7 @@ const fmtDisp = p => { const c=cleanP(p); return c.length>3?c.slice(0,3)+'-'+c.s
 /* ─── API PLACA ─────────────────────────────────────────────── */
 async function consultarPlaca(placa) {
   const p   = cleanP(placa);
-  const res = await fetch('/.netlify/functions/consultar',{
+  const res = await fetch('/api/consultar',{
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({placa:p}), signal: AbortSignal.timeout(12000),
   });
@@ -344,7 +344,7 @@ function EditCatModal({data, catAtual, cats, onClose, onSaved}) {
     if (!sel||sel===catAtual?.id){onClose();return;}
     setSaving(true);
     try{
-      await fetch('/.netlify/functions/atualizar',{method:'POST',headers:{'Content-Type':'application/json'},
+      await fetch('/api/atualizar',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({placa:data.placa,categoriaId:sel,marca:data.marca,modelo:data.modelo})});
       setSaved(true);
       setTimeout(()=>{onSaved(cats[sel]||CAT_FB[sel]);onClose();},900);
@@ -450,14 +450,14 @@ function BuscaCliente({placa, onSelect}) {
   const timer = useRef(null);
   useEffect(()=>{
     if (!placa) return;
-    fetch('/.netlify/functions/clientes?placa='+placa).then(r=>r.ok?r.json():null).then(c=>{ if(c) onSelect(c); }).catch(()=>{});
+    fetch('/api/clientes?placa='+placa).then(r=>r.ok?r.json():null).then(c=>{ if(c) onSelect(c); }).catch(()=>{});
   },[placa]);
   function handleSearch(v) {
     setQuery(v); clearTimeout(timer.current);
     if (!v.trim()){setResults([]);return;}
     timer.current=setTimeout(async()=>{
       setLoading(true);
-      try{ const r=await fetch('/.netlify/functions/clientes?busca='+encodeURIComponent(v)); const d=await r.json(); setResults(d.rows||[]); }
+      try{ const r=await fetch('/api/clientes?busca='+encodeURIComponent(v)); const d=await r.json(); setResults(d.rows||[]); }
       catch(e){} finally{setLoading(false);}
     },400);
   }
@@ -498,10 +498,10 @@ function NovaOSModal({data, cats, onClose, onSaved}) {
       const nome=nomeNovo.trim(); const tel=telNovo.replace(/\D/g,'');
       let cId=clienteSel?.id||null;
       if (nome||tel) {
-        if (cId) { await fetch('/.netlify/functions/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:cId,nome:nome||clienteSel.nome,telefone:tel,placas:[...new Set([...(clienteSel.placas||[]),data.placa])]})}); }
-        else { const rc=await fetch('/.netlify/functions/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome:nome||'Cliente '+fmtDisp(data.placa),telefone:tel,placas:[data.placa]})}); const nc=await rc.json(); cId=nc?.id||null; }
+        if (cId) { await fetch('/api/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:cId,nome:nome||clienteSel.nome,telefone:tel,placas:[...new Set([...(clienteSel.placas||[]),data.placa])]})}); }
+        else { const rc=await fetch('/api/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome:nome||'Cliente '+fmtDisp(data.placa),telefone:tel,placas:[data.placa]})}); const nc=await rc.json(); cId=nc?.id||null; }
       }
-      await fetch('/.netlify/functions/os',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({placa:data.placa,marca:data.marca,modelo:data.modelo,cor:data.cor,categoria_id:data.categoria_id,servico,valor,obs,telefone:tel,cliente_id:cId})});
+      await fetch('/api/os',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({placa:data.placa,marca:data.marca,modelo:data.modelo,cor:data.cor,categoria_id:data.categoria_id,servico,valor,obs,telefone:tel,cliente_id:cId})});
       if (tel) enviarWhats('entrada',{telefone:tel,placa:data.placa,marca:data.marca,modelo:data.modelo,cor:data.cor,servico,valor});
       onSaved();
     } catch(e){console.error(e);} finally{setSaving(false);}
@@ -559,20 +559,20 @@ function OSScreen({cats}) {
   const timer = useRef(null);
   useEffect(()=>{ fetchOs(); timer.current=setInterval(fetchOs,30000); return()=>clearInterval(timer.current); },[]);
   async function fetchOs() {
-    try{ const r=await fetch('/.netlify/functions/os?action=fila'); if(!r.ok)return; const d=await r.json(); setOs(d.rows||[]); }
+    try{ const r=await fetch('/api/os?action=fila'); if(!r.ok)return; const d=await r.json(); setOs(d.rows||[]); }
     catch(e){console.error(e);} finally{setLoading(false);}
   }
   async function avancar(item, novoStatus) {
     setUpd(u=>({...u,[item.id]:true}));
     try{
-      await fetch('/.netlify/functions/os?id='+item.id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:novoStatus})});
+      await fetch('/api/os?id='+item.id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:novoStatus})});
       setOs(o=>o.map(x=>x.id===item.id?{...x,status:novoStatus}:x));
       if (novoStatus==='pronto'&&item.telefone) enviarWhats('saida',{telefone:item.telefone,placa:item.placa,marca:item.marca,modelo:item.modelo,cor:item.cor,servico:item.servico,valor:item.valor});
     }catch(e){console.error(e);} finally{setUpd(u=>({...u,[item.id]:false}));}
   }
   async function cancelar(id) {
     if (!confirm('Cancelar esta OS?')) return;
-    await fetch('/.netlify/functions/os?id='+id,{method:'DELETE'});
+    await fetch('/api/os?id='+id,{method:'DELETE'});
     setOs(o=>o.map(x=>x.id===id?{...x,status:'cancelado'}:x));
   }
   const ativos     = os.filter(o=>['aguardando','em_lavagem'].includes(o.status));
@@ -653,7 +653,7 @@ function CaixaScreen({cats}) {
   useEffect(()=>{ fetchCaixa(); },[data]);
   async function fetchCaixa() {
     setLoading(true);
-    try{ const r=await fetch('/.netlify/functions/os?action=caixa&data='+data); if(!r.ok)return; setCaixa(await r.json()); }
+    try{ const r=await fetch('/api/os?action=caixa&data='+data); if(!r.ok)return; setCaixa(await r.json()); }
     catch(e){console.error(e);} finally{setLoading(false);}
   }
   return (
@@ -695,11 +695,11 @@ function ClientesScreen({cats, onSelectPlate}) {
   useEffect(()=>{ fetchCli(''); },[]);
   async function fetchCli(q) {
     setLoading(true);
-    try{ const r=await fetch(q?'/.netlify/functions/clientes?busca='+encodeURIComponent(q):'/.netlify/functions/clientes'); const d=await r.json(); setClientes(d.rows||[]); }
+    try{ const r=await fetch(q?'/api/clientes?busca='+encodeURIComponent(q):'/api/clientes'); const d=await r.json(); setClientes(d.rows||[]); }
     catch(e){console.error(e);} finally{setLoading(false);}
   }
   function handleBusca(v){ setBusca(v); clearTimeout(timer.current); timer.current=setTimeout(()=>fetchCli(v),400); }
-  async function deletar(id){ if(!confirm('Remover?'))return; await fetch('/.netlify/functions/clientes?id='+id,{method:'DELETE'}); setClientes(c=>c.filter(x=>x.id!==id)); }
+  async function deletar(id){ if(!confirm('Remover?'))return; await fetch('/api/clientes?id='+id,{method:'DELETE'}); setClientes(c=>c.filter(x=>x.id!==id)); }
   return (
     <div style={{padding:'14px 16px 88px',maxWidth:640,margin:'0 auto'}}>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
@@ -747,7 +747,7 @@ function ClienteFormModal({inicial, onClose, onSaved}) {
     if (!form.nome) return; setSaving(true);
     try{
       const placas=form.placas.split(',').map(p=>p.trim().replace(/[^A-Z0-9]/gi,'').toUpperCase()).filter(Boolean);
-      await fetch('/.netlify/functions/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:inicial?.id,nome:form.nome,telefone:form.telefone.replace(/\D/g,''),placas,obs:form.obs})});
+      await fetch('/api/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:inicial?.id,nome:form.nome,telefone:form.telefone.replace(/\D/g,''),placas,obs:form.obs})});
       onSaved();
     }catch(e){console.error(e);} finally{setSaving(false);}
   }
@@ -781,9 +781,9 @@ function PlanosScreen() {
   const [form,setForm]=useState({nome:'',qtd_lavagens:8,valor:0,servico:'simples',descricao:''});
   const sf=(k,v)=>setForm(f=>({...f,[k]:v}));
   useEffect(()=>{ fetchPl(); },[]);
-  async function fetchPl(){ setLoading(true); try{ const r=await fetch('/.netlify/functions/planos'); setPlanos(await r.json()||[]); }catch(e){console.error(e);}finally{setLoading(false);} }
-  async function salvarPl(){ if(!form.nome||!form.valor)return; setSaving(true); try{ await fetch('/.netlify/functions/planos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)}); await fetchPl(); setShowForm(false); setForm({nome:'',qtd_lavagens:8,valor:0,servico:'simples',descricao:''}); }catch(e){console.error(e);}finally{setSaving(false);} }
-  async function deletarPl(id){ if(!confirm('Remover plano?'))return; await fetch('/.netlify/functions/planos?id='+id,{method:'DELETE'}); setPlanos(p=>p.filter(x=>x.id!==id)); }
+  async function fetchPl(){ setLoading(true); try{ const r=await fetch('/api/planos'); setPlanos(await r.json()||[]); }catch(e){console.error(e);}finally{setLoading(false);} }
+  async function salvarPl(){ if(!form.nome||!form.valor)return; setSaving(true); try{ await fetch('/api/planos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)}); await fetchPl(); setShowForm(false); setForm({nome:'',qtd_lavagens:8,valor:0,servico:'simples',descricao:''}); }catch(e){console.error(e);}finally{setSaving(false);} }
+  async function deletarPl(id){ if(!confirm('Remover plano?'))return; await fetch('/api/planos?id='+id,{method:'DELETE'}); setPlanos(p=>p.filter(x=>x.id!==id)); }
   return (
     <div style={{padding:'14px 16px 88px',maxWidth:640,margin:'0 auto'}}>
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
@@ -855,7 +855,7 @@ function ModelosScreen({cats}) {
       if (busca)     p.append('busca',   busca);
       if (catFiltro) p.append('cat',     catFiltro);
       if (segFiltro) p.append('seg',     segFiltro);
-      const r = await fetch('/.netlify/functions/modelos?'+p);
+      const r = await fetch('/api/modelos?'+p);
       const d = await r.json();
       const rowsData = Array.isArray(d?.rows) ? d.rows : [];
       setRows(rowsData);
@@ -887,7 +887,7 @@ function ModelosScreen({cats}) {
     }));
     setSaving(s=>({...s,[subId]:true}));
     try {
-      await fetch('/.netlify/functions/modelos',{method:'PATCH',headers:{'Content-Type':'application/json'},
+      await fetch('/api/modelos',{method:'PATCH',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({sub_segmento_id:subId, categoria_id:novaCatId})});
       setSaved(s=>({...s,[subId]:true}));
       setTimeout(()=>setSaved(s=>({...s,[subId]:false})),2000);
@@ -1031,7 +1031,7 @@ function PriceManager({cats, onReload}) {
   async function saveCat(data) {
     setSaving(s=>({...s,[data.id]:true}));
     try{
-      await fetch('/.netlify/functions/categorias',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      await fetch('/api/categorias',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
       await onReload(); setShowForm(false); setEditando(null);
     }catch(e){console.error(e);}finally{setSaving(s=>({...s,[data.id]:false}));}
   }
