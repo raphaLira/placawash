@@ -416,13 +416,38 @@ function fmtFone(tel) {
   const n = (tel||'').replace(/\D/g,'');
   return n.startsWith('55') ? n : '55'+n;
 }
-function enviarWhats(tipo, p) {
-  if (!p.telefone) return;
+const MSG_ENTRADA_DEFAULT = '🚗 *{nome_lavajato}*\n\nOlá! Recebemos seu veículo:\n*{marca} {modelo} {cor}*\nPlaca: *{placa}*\n\nServiço: *{servico}*\nValor: *R$ {valor}*\n\nAssim que ficar pronto te avisamos! ⏳';
+const MSG_SAIDA_DEFAULT   = '✅ *{nome_lavajato}*\n\nSeu veículo está pronto!\n*{marca} {modelo} {cor}*\nPlaca: *{placa}*\n\nServiço: *{servico}*\nValor: *R$ {valor}*\n\nObrigado pela preferência! 💧';
+
+async function fetchConfig() {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return null;
+    const r = await fetch('/api/config', { headers: { Authorization: 'Bearer '+session.access_token } });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch(e) { return null; }
+}
+
+function aplicarTemplate(template, p, config) {
   const sv  = SERVICOS.find(s=>s.id===p.servico)||{label:'Lavagem'};
-  const vei = [p.marca,p.modelo,p.cor?'— '+p.cor:''].filter(Boolean).join(' ');
-  const msg = tipo==='entrada'
-    ? '🚗 *PlacaWash*\n\nOlá! Recebemos seu veículo:\n*'+vei+'*\nPlaca: *'+fmtDisp(p.placa)+'*\n\nServiço: *'+sv.label+'*\nValor: *R$ '+p.valor+'*\n\nAssim que ficar pronto te avisamos! ⏳'
-    : '✅ *PlacaWash*\n\nSeu veículo está pronto!\n*'+vei+'*\nPlaca: *'+fmtDisp(p.placa)+'*\n\nServiço: *'+sv.label+'*\nValor: *R$ '+p.valor+'*\n\nObrigado pela preferência! 💧';
+  return template
+    .replace(/\{nome_lavajato\}/g, config?.nome_lavajato || 'PlacaWash')
+    .replace(/\{marca\}/g,    p.marca||'')
+    .replace(/\{modelo\}/g,   p.modelo||'')
+    .replace(/\{cor\}/g,      p.cor?'— '+p.cor:'')
+    .replace(/\{placa\}/g,    fmtDisp(p.placa))
+    .replace(/\{servico\}/g,  sv.label)
+    .replace(/\{valor\}/g,    p.valor)
+    .replace(/\n\s*\n\s*\n/g, '\n\n'); // remove linhas em branco extras se algum campo ficar vazio
+}
+
+function enviarWhats(tipo, p, config) {
+  if (!p.telefone) return;
+  const template = tipo==='entrada'
+    ? (config?.msg_entrada || MSG_ENTRADA_DEFAULT)
+    : (config?.msg_saida   || MSG_SAIDA_DEFAULT);
+  const msg = aplicarTemplate(template, p, config);
   window.open('https://wa.me/'+fmtFone(p.telefone)+'?text='+encodeURIComponent(msg),'_blank');
 }
 
@@ -480,7 +505,7 @@ function BuscaCliente({placa, onSelect}) {
 }
 
 /* ─── NOVA OS MODAL ──────────────────────────────────────── */
-function NovaOSModal({data, cats, onClose, onSaved}) {
+function NovaOSModal({data, cats, config, onClose, onSaved}) {
   const cat = data.cat||(data.categoria_id&&cats[data.categoria_id]);
   const [step,       setStep]       = useState(1);
   const [servico,    setServico]    = useState('simples');
@@ -490,8 +515,31 @@ function NovaOSModal({data, cats, onClose, onSaved}) {
   const [nomeNovo,   setNomeNovo]   = useState('');
   const [telNovo,    setTelNovo]    = useState('');
   const [saving,     setSaving]     = useState(false);
+  const [assinatura, setAssinatura] = useState(null);
+  const [loadingAssin, setLoadingAssin] = useState(false);
+  const [usarPlano,  setUsarPlano]  = useState(false);
   useEffect(()=>{ const base=cat?.preco||0; const mult=SERVICOS.find(s=>s.id===servico)?.mult||1; setValor(Math.round(base*mult)); },[servico,cat]);
-  function handleSel(c){ setClienteSel(c); setNomeNovo(c.nome||''); setTelNovo(c.telefone||''); }
+
+  // Zera o valor se for usar lavagem do plano
+  useEffect(()=>{
+    if (usarPlano && assinatura?.plano) {
+      setValor(0);
+    } else if (!usarPlano && cat) {
+      const mult = SERVICOS.find(s=>s.id===servico)?.mult||1;
+      setValor(Math.round((cat.preco||0)*mult));
+    }
+  },[usarPlano]);
+  async function handleSel(c){
+    setClienteSel(c); setNomeNovo(c.nome||''); setTelNovo(c.telefone||'');
+    setLoadingAssin(true);
+    try {
+      const r = await fetch('/api/planos?action=assinatura&cliente_id='+c.id);
+      const a = await r.json();
+      setAssinatura(a);
+      setUsarPlano(!!a && a.plano && a.lavagens_usadas < a.plano.qtd_lavagens);
+    } catch(e){ setAssinatura(null); }
+    finally{ setLoadingAssin(false); }
+  }
   async function confirmar() {
     setSaving(true);
     try {
@@ -501,8 +549,14 @@ function NovaOSModal({data, cats, onClose, onSaved}) {
         if (cId) { await fetch('/api/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:cId,nome:nome||clienteSel.nome,telefone:tel,placas:[...new Set([...(clienteSel.placas||[]),data.placa])]})}); }
         else { const rc=await fetch('/api/clientes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nome:nome||'Cliente '+fmtDisp(data.placa),telefone:tel,placas:[data.placa]})}); const nc=await rc.json(); cId=nc?.id||null; }
       }
-      await fetch('/api/os',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({placa:data.placa,marca:data.marca,modelo:data.modelo,cor:data.cor,categoria_id:data.categoria_id,servico,valor,obs,telefone:tel,cliente_id:cId})});
-      if (tel) enviarWhats('entrada',{telefone:tel,placa:data.placa,marca:data.marca,modelo:data.modelo,cor:data.cor,servico,valor});
+      await fetch('/api/os',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({placa:data.placa,marca:data.marca,modelo:data.modelo,cor:data.cor,categoria_id:data.categoria_id,servico,valor,obs,telefone:tel,cliente_id:cId,plano_usado:usarPlano&&assinatura?assinatura.id:null})});
+
+      // Se usou lavagem do plano, registra o consumo
+      if (usarPlano && assinatura) {
+        await fetch('/api/planos?action=usar&id='+assinatura.id, { method:'PATCH' });
+      }
+
+      if (tel) enviarWhats('entrada',{telefone:tel,placa:data.placa,marca:data.marca,modelo:data.modelo,cor:data.cor,servico,valor},config);
       onSaved();
     } catch(e){console.error(e);} finally{setSaving(false);}
   }
@@ -531,7 +585,33 @@ function NovaOSModal({data, cats, onClose, onSaved}) {
         {step===2&&(
           <>
             <div style={{padding:'10px 14px',borderRadius:10,marginBottom:16,background:'rgba(204,255,0,.05)',border:'1px solid rgba(204,255,0,.2)'}}><div style={{fontSize:11,color:'var(--dim)'}}>Serviço</div><div style={{fontSize:14,fontWeight:700,color:'var(--acid)',marginTop:2}}>{sv?.emoji} {sv?.label} — R$ {valor}</div></div>
-            {clienteSel&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 12px',borderRadius:8,marginBottom:12,background:'rgba(76,175,80,.08)',border:'1px solid rgba(76,175,80,.25)'}}><span>✓</span><div style={{flex:1}}><div style={{fontSize:12,fontWeight:600,color:'#4caf50'}}>{clienteSel.nome}</div>{clienteSel.telefone&&<div style={{fontSize:11,color:'var(--dim)'}}>📱 {clienteSel.telefone}</div>}</div><button onClick={()=>{setClienteSel(null);setNomeNovo('');setTelNovo('');}} style={{fontSize:11,color:'var(--dim)',background:'none',border:'none',cursor:'pointer'}}>✕</button></div>}
+            {clienteSel&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 12px',borderRadius:8,marginBottom:12,background:'rgba(76,175,80,.08)',border:'1px solid rgba(76,175,80,.25)'}}><span>✓</span><div style={{flex:1}}><div style={{fontSize:12,fontWeight:600,color:'#4caf50'}}>{clienteSel.nome}</div>{clienteSel.telefone&&<div style={{fontSize:11,color:'var(--dim)'}}>📱 {clienteSel.telefone}</div>}</div><button onClick={()=>{setClienteSel(null);setNomeNovo('');setTelNovo('');setAssinatura(null);}} style={{fontSize:11,color:'var(--dim)',background:'none',border:'none',cursor:'pointer'}}>✕</button></div>}
+
+            {loadingAssin&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'10px',marginBottom:12,fontSize:12,color:'var(--dim)'}}><span style={{width:12,height:12,border:'2px solid var(--neon)',borderTopColor:'transparent',borderRadius:'50%',display:'inline-block',animation:'spin .9s linear infinite'}}/>Verificando plano…</div>}
+
+            {!loadingAssin&&assinatura&&assinatura.plano&&(()=>{
+              const restantes = assinatura.plano.qtd_lavagens - assinatura.lavagens_usadas;
+              const esgotado  = restantes <= 0;
+              return (
+                <div style={{padding:'12px 14px',borderRadius:10,marginBottom:14,background:esgotado?'rgba(255,152,0,.08)':'rgba(0,229,255,.06)',border:`1px solid ${esgotado?'rgba(255,152,0,.3)':'rgba(0,229,255,.25)'}`}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+                    <span style={{fontSize:18}}>📋</span>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:13,fontWeight:700,color:esgotado?'#ff9800':'var(--neon)'}}>{assinatura.plano.nome}</div>
+                      <div style={{fontSize:11,color:'var(--dim)'}}>{assinatura.lavagens_usadas}/{assinatura.plano.qtd_lavagens} lavagens usadas</div>
+                    </div>
+                  </div>
+                  {esgotado ? (
+                    <div style={{fontSize:12,color:'#ff9800',fontWeight:600}}>⚠️ Plano esgotado este mês. Deseja contratar um novo plano?</div>
+                  ) : (
+                    <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',fontSize:13,fontWeight:600,color:'var(--txt)'}}>
+                      <input type="checkbox" checked={usarPlano} onChange={e=>setUsarPlano(e.target.checked)} style={{width:16,height:16,cursor:'pointer'}}/>
+                      Usar lavagem do plano (restam {restantes})
+                    </label>
+                  )}
+                </div>
+              );
+            })()}
             {!clienteSel&&<div style={{marginBottom:14}}><label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:6,textTransform:'uppercase'}}>Buscar cliente existente</label><BuscaCliente placa={data.placa} onSelect={handleSel}/></div>}
             <div style={{display:'flex',flexDirection:'column',gap:12,marginBottom:20}}>
               <div><label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:5,textTransform:'uppercase'}}>Nome <span style={{fontWeight:400,textTransform:'none'}}>(opcional)</span></label><input type="text" value={nomeNovo} onChange={e=>setNomeNovo(e.target.value)} placeholder="Ex: João Silva" className="fi"/></div>
@@ -552,7 +632,7 @@ function NovaOSModal({data, cats, onClose, onSaved}) {
 }
 
 /* ─── OS SCREEN ──────────────────────────────────────────── */
-function OSScreen({cats}) {
+function OSScreen({cats, config}) {
   const [os,      setOs]      = useState([]);
   const [loading, setLoading] = useState(true);
   const [upd,     setUpd]     = useState({});
@@ -567,7 +647,7 @@ function OSScreen({cats}) {
     try{
       await fetch('/api/os?id='+item.id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:novoStatus})});
       setOs(o=>o.map(x=>x.id===item.id?{...x,status:novoStatus}:x));
-      if (novoStatus==='pronto'&&item.telefone) enviarWhats('saida',{telefone:item.telefone,placa:item.placa,marca:item.marca,modelo:item.modelo,cor:item.cor,servico:item.servico,valor:item.valor});
+      if (novoStatus==='pronto'&&item.telefone) enviarWhats('saida',{telefone:item.telefone,placa:item.placa,marca:item.marca,modelo:item.modelo,cor:item.cor,servico:item.servico,valor:item.valor},config);
     }catch(e){console.error(e);} finally{setUpd(u=>({...u,[item.id]:false}));}
   }
   async function cancelar(id) {
@@ -618,7 +698,7 @@ function OSScreen({cats}) {
                   </div>
                   <div style={{display:'flex',gap:6}}>
                     {st.btn&&<button onClick={()=>avancar(o,st.next)} disabled={!!upd[o.id]} style={{flex:1,padding:'9px',borderRadius:8,fontSize:12,fontWeight:700,cursor:'pointer',background:o.status==='aguardando'?'rgba(0,229,255,.15)':'rgba(76,175,80,.15)',border:'1px solid '+(o.status==='aguardando'?'rgba(0,229,255,.4)':'rgba(76,175,80,.4)'),color:o.status==='aguardando'?'var(--neon)':'#4caf50'}}>{upd[o.id]?'…':st.btn}{o.status==='em_lavagem'&&o.telefone?' 📱':''}</button>}
-                    {o.telefone&&<button onClick={()=>enviarWhats('entrada',{telefone:o.telefone,placa:o.placa,marca:o.marca,modelo:o.modelo,cor:o.cor,servico:o.servico,valor:o.valor})} style={{padding:'9px 12px',borderRadius:8,fontSize:14,cursor:'pointer',background:'rgba(37,211,102,.1)',border:'1px solid rgba(37,211,102,.3)',color:'#25d366'}}>📱</button>}
+                    {o.telefone&&<button onClick={()=>enviarWhats('entrada',{telefone:o.telefone,placa:o.placa,marca:o.marca,modelo:o.modelo,cor:o.cor,servico:o.servico,valor:o.valor},config)} style={{padding:'9px 12px',borderRadius:8,fontSize:14,cursor:'pointer',background:'rgba(37,211,102,.1)',border:'1px solid rgba(37,211,102,.3)',color:'#25d366'}}>📱</button>}
                     <button onClick={()=>cancelar(o.id)} style={{padding:'9px 12px',borderRadius:8,fontSize:12,cursor:'pointer',background:'rgba(244,67,54,.08)',border:'1px solid rgba(244,67,54,.2)',color:'#f44336'}}>✕</button>
                   </div>
                 </div>
@@ -634,7 +714,7 @@ function OSScreen({cats}) {
             {finalizados.map(o=>{
               const cat=o.categoria_id&&cats[o.categoria_id];
               const sv=SERVICOS.find(s=>s.id===o.servico);
-              return (<div key={o.id} style={{background:'var(--s1)',border:'1px solid rgba(76,175,80,.2)',borderRadius:10,padding:'10px 14px',display:'flex',alignItems:'center',gap:10}}><span style={{fontSize:18}}>✅</span><div style={{flex:1,minWidth:0}}><div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}><span style={{fontFamily:'JetBrains Mono,monospace',fontWeight:700,fontSize:14,color:'var(--neon)'}}>{fmtDisp(o.placa)}</span>{cat&&<span style={{fontSize:10,color:cat.color}}>{cat.emoji} {cat.label}</span>}</div><div style={{fontSize:11,color:'var(--dim)'}}>{o.marca} {o.modelo} · {sv?.emoji} {sv?.label}{o.nome_cliente?' · 👤 '+o.nome_cliente:''}</div></div><div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>{o.telefone&&<button onClick={()=>enviarWhats('saida',{telefone:o.telefone,placa:o.placa,marca:o.marca,modelo:o.modelo,cor:o.cor,servico:o.servico,valor:o.valor})} style={{padding:'5px 10px',borderRadius:7,fontSize:12,cursor:'pointer',background:'rgba(37,211,102,.1)',border:'1px solid rgba(37,211,102,.3)',color:'#25d366'}}>📱</button>}<div style={{fontFamily:'Bebas Neue,cursive',fontSize:22,color:'#4caf50'}}>R$ {o.valor}</div></div></div>);
+              return (<div key={o.id} style={{background:'var(--s1)',border:'1px solid rgba(76,175,80,.2)',borderRadius:10,padding:'10px 14px',display:'flex',alignItems:'center',gap:10}}><span style={{fontSize:18}}>✅</span><div style={{flex:1,minWidth:0}}><div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}><span style={{fontFamily:'JetBrains Mono,monospace',fontWeight:700,fontSize:14,color:'var(--neon)'}}>{fmtDisp(o.placa)}</span>{cat&&<span style={{fontSize:10,color:cat.color}}>{cat.emoji} {cat.label}</span>}</div><div style={{fontSize:11,color:'var(--dim)'}}>{o.marca} {o.modelo} · {sv?.emoji} {sv?.label}{o.nome_cliente?' · 👤 '+o.nome_cliente:''}</div></div><div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>{o.telefone&&<button onClick={()=>enviarWhats('saida',{telefone:o.telefone,placa:o.placa,marca:o.marca,modelo:o.modelo,cor:o.cor,servico:o.servico,valor:o.valor},config)} style={{padding:'5px 10px',borderRadius:7,fontSize:12,cursor:'pointer',background:'rgba(37,211,102,.1)',border:'1px solid rgba(37,211,102,.3)',color:'#25d366'}}>📱</button>}<div style={{fontFamily:'Bebas Neue,cursive',fontSize:22,color:'#4caf50'}}>R$ {o.valor}</div></div></div>);
             })}
           </div>
         </div>
@@ -658,7 +738,25 @@ function CaixaScreen({cats}) {
   }
   return (
     <div style={{padding:'14px 16px 88px',maxWidth:640,margin:'0 auto'}}>
-      <div style={{marginBottom:16}}><div style={{fontFamily:'Bebas Neue,cursive',fontSize:28,color:'var(--acid)',letterSpacing:'.05em'}}>CAIXA DO DIA</div><input type="date" value={data} onChange={e=>setData(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bdr)',borderRadius:8,padding:'8px 12px',color:'var(--txt)',fontSize:13,outline:'none',marginTop:8,width:'100%'}}/></div>
+      <div style={{marginBottom:16}}>
+        <div style={{fontFamily:'Bebas Neue,cursive',fontSize:28,color:'var(--acid)',letterSpacing:'.05em'}}>CAIXA DO DIA</div>
+        <div style={{display:'flex',gap:6,marginTop:10,marginBottom:8}}>
+          {[['Hoje',0],['Ontem',-1],['7 dias',-7]].map(([lb,offset])=>{
+            const d = new Date(); d.setDate(d.getDate()+offset);
+            const dStr = d.toISOString().split('T')[0];
+            const ativo = data===dStr;
+            return (
+              <button key={lb} onClick={()=>setData(dStr)} style={{flex:1,padding:'7px',borderRadius:8,fontSize:12,fontWeight:600,cursor:'pointer',
+                background:ativo?'rgba(204,255,0,.15)':'rgba(255,255,255,.04)',
+                border:`1px solid ${ativo?'rgba(204,255,0,.4)':'rgba(255,255,255,.09)'}`,
+                color:ativo?'var(--acid)':'var(--dim)'}}>
+                {lb}
+              </button>
+            );
+          })}
+        </div>
+        <input type="date" value={data} onChange={e=>setData(e.target.value)} style={{background:'var(--s2)',border:'1px solid var(--bdr)',borderRadius:8,padding:'8px 12px',color:'var(--txt)',fontSize:13,outline:'none',width:'100%'}}/>
+      </div>
       {loading&&<div style={{textAlign:'center',padding:'32px',color:'var(--dim)'}}>Carregando…</div>}
       {!loading&&caixa&&(
         <>
@@ -691,8 +789,21 @@ function ClientesScreen({cats, onSelectPlate}) {
   const [busca,setBusca]=useState('');
   const [showForm,setShowForm]=useState(false);
   const [editando,setEditando]=useState(null);
+  const [assinaturas,setAssinaturas]=useState({});
+  const [showPlanoModal,setShowPlanoModal]=useState(null);
+  const [menuAberto,setMenuAberto]=useState(null);
   const timer=useRef(null);
-  useEffect(()=>{ fetchCli(''); },[]);
+  useEffect(()=>{ fetchCli(''); fetchAssinaturas(); },[]);
+
+  async function fetchAssinaturas() {
+    try {
+      const r = await fetch('/api/planos?action=assinaturas_ativas');
+      const rows = await r.json();
+      const map = {};
+      if (Array.isArray(rows)) rows.forEach(a=>{ map[a.cliente_id]=a; });
+      setAssinaturas(map);
+    } catch(e){console.error(e);}
+  }
   async function fetchCli(q) {
     setLoading(true);
     try{ const r=await fetch(q?'/api/clientes?busca='+encodeURIComponent(q):'/api/clientes'); const d=await r.json(); setClientes(d.rows||[]); }
@@ -722,17 +833,35 @@ function ClientesScreen({cats, onSelectPlate}) {
                 {c.obs&&<div style={{fontSize:11,color:'var(--dim)',marginTop:4}}>📝 {c.obs}</div>}
               </div>
             </div>
+            {assinaturas[c.id]&&assinaturas[c.id].plano&&(
+              <div style={{marginTop:10,padding:'8px 12px',borderRadius:8,background:'rgba(0,229,255,.06)',border:'1px solid rgba(0,229,255,.2)',display:'flex',alignItems:'center',gap:8}}>
+                <span style={{fontSize:14}}>📋</span>
+                <span style={{flex:1,fontSize:11,color:'var(--neon)'}}>{assinaturas[c.id].plano.nome} — {assinaturas[c.id].lavagens_usadas}/{assinaturas[c.id].plano.qtd_lavagens} usadas</span>
+              </div>
+            )}
             <div style={{display:'flex',gap:7,marginTop:12,paddingTop:12,borderTop:'1px solid rgba(255,255,255,.05)'}}>
-              {(c.placas||[]).length>0&&<button onClick={()=>onSelectPlate(c.placas[0])} style={{flex:1,padding:'7px',borderRadius:8,fontSize:11,fontWeight:600,cursor:'pointer',background:'rgba(0,229,255,.1)',border:'1px solid rgba(0,229,255,.25)',color:'var(--neon)'}}>🔍 Consultar</button>}
-              <button onClick={()=>{setEditando(c);setShowForm(true);}} style={{flex:1,padding:'7px',borderRadius:8,fontSize:11,fontWeight:600,cursor:'pointer',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.1)',color:'var(--dim)'}}>✏️ Editar</button>
-              {c.telefone&&<button onClick={()=>window.open('https://wa.me/'+fmtFone(c.telefone),'_blank')} style={{padding:'7px 12px',borderRadius:8,fontSize:13,cursor:'pointer',background:'rgba(37,211,102,.1)',border:'1px solid rgba(37,211,102,.3)',color:'#25d366'}}>📱</button>}
-              <button onClick={()=>deletar(c.id)} style={{padding:'7px 12px',borderRadius:8,fontSize:11,cursor:'pointer',background:'rgba(244,67,54,.07)',border:'1px solid rgba(244,67,54,.2)',color:'#f44336'}}>🗑</button>
+              {(c.placas||[]).length>0&&<button onClick={()=>onSelectPlate(c.placas[0])} style={{flex:1,padding:'8px',borderRadius:8,fontSize:11,fontWeight:600,cursor:'pointer',background:'rgba(0,229,255,.1)',border:'1px solid rgba(0,229,255,.25)',color:'var(--neon)'}}>🔍 Consultar</button>}
+              {c.telefone&&<button onClick={()=>window.open('https://wa.me/'+fmtFone(c.telefone),'_blank')} style={{flex:1,padding:'8px',borderRadius:8,fontSize:11,fontWeight:600,cursor:'pointer',background:'rgba(37,211,102,.1)',border:'1px solid rgba(37,211,102,.3)',color:'#25d366'}}>📱 WhatsApp</button>}
+              <div style={{position:'relative'}}>
+                <button onClick={()=>setMenuAberto(menuAberto===c.id?null:c.id)} style={{padding:'8px 12px',borderRadius:8,fontSize:13,cursor:'pointer',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.1)',color:'var(--dim)'}}>⋯</button>
+                {menuAberto===c.id&&(
+                  <>
+                    <div onClick={()=>setMenuAberto(null)} style={{position:'fixed',inset:0,zIndex:59}}/>
+                    <div style={{position:'absolute',bottom:'calc(100% + 6px)',right:0,zIndex:60,background:'var(--s2)',border:'1px solid var(--bdr)',borderRadius:10,overflow:'hidden',minWidth:140,boxShadow:'0 8px 20px rgba(0,0,0,.5)'}}>
+                      <button onClick={()=>{setShowPlanoModal(c);setMenuAberto(null);}} style={{width:'100%',display:'flex',alignItems:'center',gap:8,padding:'10px 14px',background:'none',border:'none',color:'#7c4dff',cursor:'pointer',fontSize:12,textAlign:'left'}}>📋 Plano</button>
+                      <button onClick={()=>{setEditando(c);setShowForm(true);setMenuAberto(null);}} style={{width:'100%',display:'flex',alignItems:'center',gap:8,padding:'10px 14px',background:'none',border:'none',color:'var(--txt)',cursor:'pointer',fontSize:12,textAlign:'left'}}>✏️ Editar</button>
+                      <button onClick={()=>{deletar(c.id);setMenuAberto(null);}} style={{width:'100%',display:'flex',alignItems:'center',gap:8,padding:'10px 14px',background:'none',border:'none',color:'#f44336',cursor:'pointer',fontSize:12,textAlign:'left'}}>🗑 Excluir</button>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         ))}
         {!loading&&clientes.length===0&&<div style={{textAlign:'center',padding:'48px 0'}}><div style={{fontSize:48,marginBottom:12,opacity:.2}}>👥</div><div style={{fontSize:14,color:'var(--dim)'}}>{busca?'Nenhum encontrado':'Nenhum cadastrado'}</div></div>}
       </div>
       {showForm&&<ClienteFormModal inicial={editando} onClose={()=>{setShowForm(false);setEditando(null);}} onSaved={()=>{setShowForm(false);setEditando(null);fetchCli(busca);}}/>}
+      {showPlanoModal&&<AssinarPlanoModal cliente={showPlanoModal} assinaturaAtual={assinaturas[showPlanoModal.id]} onClose={()=>setShowPlanoModal(null)} onSaved={()=>{setShowPlanoModal(null);fetchAssinaturas();}}/>}
     </div>
   );
 }
@@ -772,15 +901,107 @@ function ClienteFormModal({inicial, onClose, onSaved}) {
   );
 }
 
+
+/* ─── ASSINAR PLANO MODAL ───────────────────────────────── */
+function AssinarPlanoModal({cliente, assinaturaAtual, onClose, onSaved}) {
+  const [planos,  setPlanos]  = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selecionado, setSelecionado] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(()=>{
+    fetch('/api/planos').then(r=>r.json()).then(d=>{ setPlanos(Array.isArray(d)?d:[]); }).catch(()=>{}).finally(()=>setLoading(false));
+  },[]);
+
+  async function confirmar() {
+    if (!selecionado) return;
+    setSaving(true);
+    try {
+      await fetch('/api/planos?action=assinar', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ cliente_id: cliente.id, plano_id: selecionado }),
+      });
+      onSaved();
+    } catch(e){console.error(e);}
+    finally{setSaving(false);}
+  }
+
+  return (
+    <div className="overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="up" style={{width:'100%',maxWidth:480,background:'var(--s1)',border:'1px solid var(--bdr)',borderRadius:20,padding:24,maxHeight:'88vh',overflowY:'auto'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+          <div>
+            <div style={{fontFamily:'Bebas Neue,cursive',fontSize:24,color:'var(--neon)'}}>ASSINAR PLANO</div>
+            <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>{cliente.nome}</div>
+          </div>
+          <button onClick={onClose} style={{padding:8,borderRadius:8,background:'rgba(255,255,255,.05)',border:'none',cursor:'pointer',color:'var(--dim)',fontSize:18}}>✕</button>
+        </div>
+
+        {assinaturaAtual&&assinaturaAtual.plano&&(
+          <div style={{padding:'10px 14px',borderRadius:10,marginBottom:16,background:'rgba(124,77,255,.08)',border:'1px solid rgba(124,77,255,.25)'}}>
+            <div style={{fontSize:11,color:'var(--dim)',marginBottom:2}}>Plano atual</div>
+            <div style={{fontSize:13,fontWeight:700,color:'#7c4dff'}}>{assinaturaAtual.plano.nome} — {assinaturaAtual.lavagens_usadas}/{assinaturaAtual.plano.qtd_lavagens} usadas</div>
+          </div>
+        )}
+
+        {loading&&<div style={{textAlign:'center',padding:'24px',color:'var(--dim)'}}>Carregando…</div>}
+
+        {!loading&&planos.length===0&&(
+          <div style={{textAlign:'center',padding:'32px 0'}}>
+            <div style={{fontSize:36,opacity:.2,marginBottom:8}}>📋</div>
+            <div style={{fontSize:13,color:'var(--dim)'}}>Nenhum plano cadastrado ainda</div>
+          </div>
+        )}
+
+        <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:20}}>
+          {planos.map(p=>(
+            <button key={p.id} onClick={()=>setSelecionado(p.id)} style={{
+              display:'flex',alignItems:'center',gap:12,padding:'12px 14px',borderRadius:12,cursor:'pointer',textAlign:'left',
+              background:selecionado===p.id?'rgba(124,77,255,.12)':'rgba(255,255,255,.03)',
+              border:`2px solid ${selecionado===p.id?'rgba(124,77,255,.5)':'rgba(255,255,255,.08)'}`,
+            }}>
+              <span style={{fontSize:24}}>📋</span>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:13,color:selecionado===p.id?'#7c4dff':'var(--txt)'}}>{p.nome}</div>
+                <div style={{fontSize:11,color:'var(--dim)'}}>{p.qtd_lavagens} lavagens/mês</div>
+              </div>
+              <div style={{fontFamily:'Bebas Neue,cursive',fontSize:20,color:selecionado===p.id?'#7c4dff':'var(--dim)'}}>R$ {p.valor}</div>
+            </button>
+          ))}
+        </div>
+
+        <button onClick={confirmar} disabled={saving||!selecionado} style={{
+          width:'100%',padding:13,borderRadius:12,fontWeight:700,fontSize:14,
+          cursor:saving||!selecionado?'not-allowed':'pointer',opacity:!selecionado?.4:1,
+          background:'linear-gradient(135deg,rgba(124,77,255,.25),rgba(124,77,255,.1))',
+          border:'2px solid rgba(124,77,255,.5)',color:'#7c4dff',
+        }}>
+          {saving?'Assinando…':'✓ Confirmar Assinatura'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ─── PLANOS SCREEN ──────────────────────────────────────── */
 function PlanosScreen() {
   const [planos,setPlanos]=useState([]);
+  const [contagem,setContagem]=useState({});
   const [loading,setLoading]=useState(true);
   const [showForm,setShowForm]=useState(false);
   const [saving,setSaving]=useState(false);
   const [form,setForm]=useState({nome:'',qtd_lavagens:8,valor:0,servico:'simples',descricao:''});
   const sf=(k,v)=>setForm(f=>({...f,[k]:v}));
-  useEffect(()=>{ fetchPl(); },[]);
+  useEffect(()=>{ fetchPl(); fetchContagem(); },[]);
+  async function fetchContagem(){
+    try{
+      const r=await fetch('/api/planos?action=assinaturas_ativas');
+      const rows=await r.json();
+      const map={};
+      if(Array.isArray(rows)) rows.forEach(a=>{ map[a.plano_id]=(map[a.plano_id]||0)+1; });
+      setContagem(map);
+    }catch(e){}
+  }
   async function fetchPl(){ setLoading(true); try{ const r=await fetch('/api/planos'); setPlanos(await r.json()||[]); }catch(e){console.error(e);}finally{setLoading(false);} }
   async function salvarPl(){ if(!form.nome||!form.valor)return; setSaving(true); try{ await fetch('/api/planos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)}); await fetchPl(); setShowForm(false); setForm({nome:'',qtd_lavagens:8,valor:0,servico:'simples',descricao:''}); }catch(e){console.error(e);}finally{setSaving(false);} }
   async function deletarPl(id){ if(!confirm('Remover plano?'))return; await fetch('/api/planos?id='+id,{method:'DELETE'}); setPlanos(p=>p.filter(x=>x.id!==id)); }
@@ -1134,9 +1355,154 @@ function CatFormModal({inicial, saving, onClose, onSave, idsExistentes}) {
 
 
 /* ─── APP ───────────────────────────────────────────────────── */
+
+/* ─── CONFIGURACOES SCREEN ──────────────────────────────── */
+const VARIAVEIS_MSG = [
+  {tag:'{nome_lavajato}', desc:'Nome do estabelecimento'},
+  {tag:'{placa}',         desc:'Placa do veículo'},
+  {tag:'{marca}',         desc:'Marca'},
+  {tag:'{modelo}',        desc:'Modelo'},
+  {tag:'{cor}',           desc:'Cor'},
+  {tag:'{servico}',       desc:'Tipo de serviço'},
+  {tag:'{valor}',         desc:'Valor da lavagem'},
+];
+
+function ConfiguracoesScreen({user, config, onConfigSaved}) {
+  const [form, setForm] = useState({
+    nome_lavajato: config?.nome_lavajato || '',
+    endereco: config?.endereco || '',
+    telefone_estabelecimento: config?.telefone_estabelecimento || '',
+    msg_entrada: config?.msg_entrada || MSG_ENTRADA_DEFAULT,
+    msg_saida: config?.msg_saida || MSG_SAIDA_DEFAULT,
+  });
+  const [saving, setSaving] = useState(false);
+  const [saved,  setSaved]  = useState(false);
+  const [campoFocado, setCampoFocado] = useState(null); // 'entrada' | 'saida' | null
+  const refEntrada = useRef(null);
+  const refSaida   = useRef(null);
+
+  const sf = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  function inserirVariavel(tag) {
+    const ref = campoFocado==='saida' ? refSaida : refEntrada;
+    const campo = campoFocado==='saida' ? 'msg_saida' : 'msg_entrada';
+    const el = ref.current;
+    if (!el) { sf(campo, form[campo]+tag); return; }
+    const start = el.selectionStart, end = el.selectionEnd;
+    const novoTexto = form[campo].slice(0,start) + tag + form[campo].slice(end);
+    sf(campo, novoTexto);
+    setTimeout(()=>{ el.focus(); el.selectionStart = el.selectionEnd = start+tag.length; }, 0);
+  }
+
+  async function salvar() {
+    setSaving(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const r = await fetch('/api/config', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+session.access_token },
+        body: JSON.stringify(form),
+      });
+      const novoConfig = await r.json();
+      onConfigSaved(novoConfig);
+      setSaved(true);
+      setTimeout(()=>setSaved(false), 2500);
+    } catch(e){ console.error(e); }
+    finally{ setSaving(false); }
+  }
+
+  return (
+    <div style={{padding:'14px 16px 88px',maxWidth:640,margin:'0 auto'}}>
+      <div style={{marginBottom:18}}>
+        <div style={{fontFamily:'Bebas Neue,cursive',fontSize:28,color:'var(--neon)',letterSpacing:'.05em'}}>CONFIGURAÇÕES</div>
+        <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>Personalize seu estabelecimento e mensagens</div>
+      </div>
+
+      {/* Dados do estabelecimento */}
+      <div style={{background:'var(--s1)',borderRadius:13,padding:18,border:'1px solid var(--bdr)',marginBottom:16}}>
+        <div style={{fontSize:13,fontWeight:700,color:'var(--txt)',marginBottom:14,display:'flex',alignItems:'center',gap:6}}>
+          🏪 Dados do Estabelecimento
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:12}}>
+          <div>
+            <label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:5,textTransform:'uppercase'}}>Nome do lava-jato</label>
+            <input type="text" value={form.nome_lavajato} onChange={e=>sf('nome_lavajato',e.target.value)} placeholder="Ex: Lava-Jato Estrela" className="fi"/>
+          </div>
+          <div>
+            <label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:5,textTransform:'uppercase'}}>Endereço</label>
+            <input type="text" value={form.endereco} onChange={e=>sf('endereco',e.target.value)} placeholder="Ex: Rua das Flores, 123" className="fi"/>
+          </div>
+          <div>
+            <label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:5,textTransform:'uppercase'}}>Telefone do estabelecimento</label>
+            <input type="tel" value={form.telefone_estabelecimento} onChange={e=>sf('telefone_estabelecimento',e.target.value.replace(/\D/g,''))} placeholder="44999999999" className="fi" style={{fontFamily:'JetBrains Mono,monospace'}}/>
+          </div>
+        </div>
+      </div>
+
+      {/* Variáveis disponíveis */}
+      <div style={{marginBottom:10}}>
+        <div style={{fontSize:11,color:'var(--dim)',fontWeight:600,marginBottom:8,textTransform:'uppercase'}}>Variáveis disponíveis — toque para inserir</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+          {VARIAVEIS_MSG.map(v=>(
+            <button key={v.tag} onClick={()=>inserirVariavel(v.tag)} title={v.desc}
+              style={{padding:'5px 10px',borderRadius:20,fontSize:11,fontWeight:600,cursor:'pointer',background:'rgba(0,229,255,.08)',border:'1px solid rgba(0,229,255,.25)',color:'var(--neon)',fontFamily:'JetBrains Mono,monospace'}}>
+              {v.tag}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Mensagem de entrada */}
+      <div style={{background:'var(--s1)',borderRadius:13,padding:18,border:'1px solid var(--bdr)',marginBottom:16}}>
+        <div style={{fontSize:13,fontWeight:700,color:'var(--txt)',marginBottom:10,display:'flex',alignItems:'center',gap:6}}>
+          ⏳ Mensagem de Entrada
+        </div>
+        <textarea ref={refEntrada} value={form.msg_entrada} onChange={e=>sf('msg_entrada',e.target.value)}
+          onFocus={()=>setCampoFocado('entrada')}
+          rows={7} className="fi" style={{resize:'vertical',fontFamily:'JetBrains Mono,monospace',fontSize:12,lineHeight:1.6}}/>
+        <button onClick={()=>sf('msg_entrada', MSG_ENTRADA_DEFAULT)} style={{marginTop:8,fontSize:11,color:'var(--dim)',background:'none',border:'none',cursor:'pointer',textDecoration:'underline'}}>Restaurar padrão</button>
+      </div>
+
+      {/* Mensagem de saída */}
+      <div style={{background:'var(--s1)',borderRadius:13,padding:18,border:'1px solid var(--bdr)',marginBottom:20}}>
+        <div style={{fontSize:13,fontWeight:700,color:'var(--txt)',marginBottom:10,display:'flex',alignItems:'center',gap:6}}>
+          ✅ Mensagem de Saída
+        </div>
+        <textarea ref={refSaida} value={form.msg_saida} onChange={e=>sf('msg_saida',e.target.value)}
+          onFocus={()=>setCampoFocado('saida')}
+          rows={7} className="fi" style={{resize:'vertical',fontFamily:'JetBrains Mono,monospace',fontSize:12,lineHeight:1.6}}/>
+        <button onClick={()=>sf('msg_saida', MSG_SAIDA_DEFAULT)} style={{marginTop:8,fontSize:11,color:'var(--dim)',background:'none',border:'none',cursor:'pointer',textDecoration:'underline'}}>Restaurar padrão</button>
+      </div>
+
+      {/* Conta */}
+      <div style={{background:'var(--s1)',borderRadius:13,padding:18,border:'1px solid var(--bdr)',marginBottom:20}}>
+        <div style={{fontSize:13,fontWeight:700,color:'var(--txt)',marginBottom:10,display:'flex',alignItems:'center',gap:6}}>
+          👤 Minha Conta
+        </div>
+        <div style={{fontSize:12,color:'var(--dim)'}}>Email: <span style={{color:'var(--txt)'}}>{user?.email}</span></div>
+      </div>
+
+      <button onClick={salvar} disabled={saving} style={{
+        width:'100%',padding:14,borderRadius:12,fontWeight:700,fontSize:14,cursor:saving?'not-allowed':'pointer',
+        display:'flex',alignItems:'center',justifyContent:'center',gap:8,
+        background:saved?'rgba(76,175,80,.15)':'linear-gradient(135deg,rgba(204,255,0,.18),rgba(204,255,0,.08))',
+        border:`1px solid ${saved?'rgba(76,175,80,.4)':'rgba(204,255,0,.4)'}`,
+        color:saved?'#4caf50':'var(--acid)',
+      }}>
+        {saving?<span style={{width:16,height:16,border:'2px solid currentColor',borderTopColor:'transparent',borderRadius:'50%',display:'inline-block',animation:'spin .9s linear infinite'}}/>:null}
+        {saved?'✓ Salvo!':saving?'Salvando…':'💾 Salvar Configurações'}
+      </button>
+    </div>
+  );
+}
+
+const MAIS_IDS = ['clientes','planos','modelos','precos','config'];
+
 function App() {
   const [user,        setUser]        = useState(null);
   const [gamif,       setGamif]       = useState(null);
+  const [config,      setConfig]      = useState(null);
+  const [mostrarMais, setMostrarMais] = useState(false);
   const [novaConquista, setNovaConquista] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [cats,        setCats]        = useState(CAT_FB);
@@ -1164,6 +1530,7 @@ function App() {
     if (!user) return;
     fetchCategorias().then(data=>{ if(data) setCats(data); });
     fetchGamificacao().then(setGamif);
+    fetchConfig().then(setConfig);
   },[user]);
 
   async function reloadCats() {
@@ -1212,16 +1579,35 @@ function App() {
     );
     if (!user) return <LoginScreen/>;
     return (
-    <div className="grid-bg" style={{minHeight:'100vh',display:'flex',flexDirection:'column'}}>
+    <div className="grid-bg" style={{minHeight:'100vh',display:'flex',flexDirection:'column',position:'relative'}}>
       <div style={{position:'fixed',top:0,left:'50%',transform:'translateX(-50%)',width:'500px',height:'220px',borderRadius:'50%',opacity:.07,filter:'blur(70px)',background:'radial-gradient(ellipse,#00e5ff,transparent 70%)',pointerEvents:'none',zIndex:0}}/>
       <nav className="nav">
-        {[['consulta','🔍','Consultar'],['os','🧾','OS/Fila'],['caixa','💵','Caixa'],['clientes','🗂️','Clientes'],['planos','📋','Planos'],['modelos','🏷️','Modelos'],['precos','💰','Preços']].map(([id,ic,lb])=>(
+        {[['consulta','🔍','Consultar'],['os','🧾','Fila'],['caixa','💵','Caixa']].map(([id,ic,lb])=>(
           <button key={id} onClick={()=>setScreen(id)} className={`nav-btn ${screen===id?'on':''}`}>
             <span style={{fontSize:18}}>{ic}</span><span>{lb}</span>
           </button>
         ))}
-        <button onClick={()=>supabase.auth.signOut()} style={{padding:'6px 10px',margin:'auto 6px auto',borderRadius:7,background:'rgba(244,67,54,.08)',border:'1px solid rgba(244,67,54,.2)',color:'#f44336',cursor:'pointer',fontSize:11,fontWeight:600,flexShrink:0,alignSelf:'center'}}>Sair</button>
+        <button onClick={()=>setMostrarMais(m=>!m)} className={`nav-btn ${MAIS_IDS.includes(screen)?'on':''}`}>
+          <span style={{fontSize:18}}>⋯</span><span>Mais</span>
+        </button>
       </nav>
+      {mostrarMais&&(
+        <div onClick={()=>setMostrarMais(false)} style={{position:'fixed',inset:0,zIndex:49}}/>
+      )}
+      {mostrarMais&&(
+        <div style={{position:'absolute',top:54,right:8,zIndex:50,background:'var(--s1)',border:'1px solid var(--bdr)',borderRadius:12,overflow:'hidden',boxShadow:'0 8px 24px rgba(0,0,0,.5)',minWidth:180}}>
+          {[['clientes','🗂️','Clientes'],['planos','📋','Planos'],['modelos','🏷️','Modelos'],['precos','💰','Preços'],['config','⚙️','Configurações']].map(([id,ic,lb])=>(
+            <button key={id} onClick={()=>{setScreen(id);setMostrarMais(false);}}
+              style={{width:'100%',display:'flex',alignItems:'center',gap:10,padding:'12px 16px',background:screen===id?'rgba(0,229,255,.08)':'transparent',border:'none',borderBottom:'1px solid rgba(255,255,255,.05)',color:screen===id?'var(--neon)':'var(--txt)',cursor:'pointer',fontSize:13,textAlign:'left'}}>
+              <span style={{fontSize:16}}>{ic}</span>{lb}
+            </button>
+          ))}
+          <button onClick={()=>supabase.auth.signOut()}
+            style={{width:'100%',display:'flex',alignItems:'center',gap:10,padding:'12px 16px',background:'rgba(244,67,54,.06)',border:'none',color:'#f44336',cursor:'pointer',fontSize:13,textAlign:'left',fontWeight:600}}>
+            <span style={{fontSize:16}}>↩</span>Sair
+          </button>
+        </div>
+      )}
       <div style={{position:'relative',zIndex:1,flex:1}}>
 
         {/* ── CONSULTAR ── */}
@@ -1270,34 +1656,58 @@ function App() {
             {result&&!loading&&(
               <div className="up">
                 {result.data.fromCache&&(
-                  <div style={{marginBottom:12,padding:11,borderRadius:10,background:'rgba(0,229,255,.06)',border:'1px solid rgba(0,229,255,.2)',fontSize:12,color:'var(--neon)',display:'flex',gap:8,alignItems:'center'}}>
-                    <span>⚡</span><span><strong>Cache local</strong> — sem gastar crédito da API.</span>
+                  <div style={{marginBottom:10,padding:9,borderRadius:9,background:'rgba(0,229,255,.06)',border:'1px solid rgba(0,229,255,.2)',fontSize:11,color:'var(--neon)',display:'flex',gap:7,alignItems:'center'}}>
+                    <span>⚡</span><span>Cache local — sem gastar crédito da API</span>
                   </div>
                 )}
-                <CatCard cat={result.cat} isManual={result.data.categoriaManual} subSegNome={result.data.subSegNome} onEdit={()=>setModal('editCat')}/>
-                <VehicleGrid d={result.data}/>
-                <div style={{padding:18,borderRadius:13,background:'linear-gradient(135deg,rgba(204,255,0,.09),rgba(204,255,0,.02))',border:'1px solid rgba(204,255,0,.27)',display:'flex',alignItems:'center',gap:16}}>
-                  <div>
-                    <div style={{fontSize:11,color:'var(--dim)',marginBottom:3,textTransform:'uppercase',letterSpacing:'.06em'}}>Preço sugerido</div>
-                    <div style={{fontFamily:'Bebas Neue,cursive',fontSize:50,color:'var(--acid)',lineHeight:1,textShadow:'0 0 8px rgba(204,255,0,.9)'}}>R$&nbsp;{result.cat?.preco??0}</div>
-                    <div style={{fontSize:12,color:'var(--dim)',marginTop:3}}>Categoria: <strong style={{color:'var(--txt)'}}>{result.cat?.label}</strong></div>
+
+                {/* Card consolidado: veículo + categoria + preço */}
+                <div style={{background:`linear-gradient(135deg,${result.cat?.color||'#ccff00'}13,${result.cat?.color||'#ccff00'}05)`,border:`1px solid ${result.cat?.color||'#ccff00'}42`,borderRadius:16,padding:18,marginBottom:14}}>
+                  <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:14}}>
+                    <div style={{fontSize:32,width:56,height:56,borderRadius:13,display:'flex',alignItems:'center',justifyContent:'center',background:`${result.cat?.color||'#ccff00'}18`,flexShrink:0}}>{result.cat?.emoji||'🚗'}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:16,fontWeight:700,color:'var(--txt)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{result.data.marca} {result.data.modelo}</div>
+                      <div style={{display:'flex',gap:7,alignItems:'center',marginTop:3,flexWrap:'wrap'}}>
+                        {result.data.cor&&<span style={{fontSize:12,color:'var(--dim)'}}>🎨 {result.data.cor}</span>}
+                        {result.data.ano&&<span style={{fontSize:12,color:'var(--dim)'}}>· {result.data.ano}</span>}
+                      </div>
+                    </div>
                   </div>
-                  <div style={{marginLeft:'auto',display:'flex',flexDirection:'column',gap:6,flexShrink:0}}>
-                  <button onClick={()=>{setOsData({placa:result.data.placa,marca:result.data.marca,modelo:result.data.modelo,cor:result.data.cor,categoria_id:result.cat?.id,cat:result.cat});setModal('novaOS');}} style={{padding:'10px 18px',borderRadius:9,fontSize:13,fontWeight:700,cursor:'pointer',background:'linear-gradient(135deg,rgba(204,255,0,.25),rgba(204,255,0,.1))',border:'2px solid rgba(204,255,0,.6)',color:'var(--acid)'}}>🧾 Abrir OS</button>
-                  <button onClick={()=>setScreen('precos')} style={{padding:'7px 15px',borderRadius:9,fontSize:11,background:'rgba(204,255,0,.06)',border:'1px solid rgba(204,255,0,.2)',color:'var(--acid)',cursor:'pointer'}}>Editar preços ›</button>
+                  <div style={{height:1,background:'rgba(255,255,255,.08)',marginBottom:14}}/>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                    <div>
+                      <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:2}}>
+                        <span style={{fontSize:10,fontWeight:700,letterSpacing:'.08em',color:result.cat?.color,textTransform:'uppercase'}}>{result.cat?.label}</span>
+                        {!result.data.categoriaManual&&<span className="chip chip-yellow" style={{fontSize:9}}>auto</span>}
+                      </div>
+                      <div style={{fontFamily:'Bebas Neue,cursive',fontSize:38,color:result.cat?.color,lineHeight:1,textShadow:`0 0 14px ${result.cat?.color}55`}}>R$ {result.cat?.preco??0}</div>
+                    </div>
+                    <button onClick={()=>setModal('editCat')} style={{padding:'6px 12px',borderRadius:8,fontSize:11,fontWeight:600,cursor:'pointer',background:'rgba(255,255,255,.06)',border:'1px solid rgba(255,255,255,.14)',color:'var(--dim)',flexShrink:0}}>✏️ Corrigir</button>
+                  </div>
                 </div>
+
+                {/* CTA principal: Abrir OS */}
+                <button onClick={()=>{setOsData({placa:result.data.placa,marca:result.data.marca,modelo:result.data.modelo,cor:result.data.cor,categoria_id:result.cat?.id,cat:result.cat});setModal('novaOS');}}
+                  style={{width:'100%',padding:'18px',borderRadius:16,fontWeight:700,fontSize:17,cursor:'pointer',background:'linear-gradient(135deg,var(--acid),#9fd400)',border:'none',color:'#0a0f05',display:'flex',alignItems:'center',justifyContent:'center',gap:10,boxShadow:'0 8px 24px rgba(204,255,0,.25)',marginBottom:10}}>
+                  🧾 Abrir Ordem de Serviço
+                </button>
+
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <button onClick={clear} style={{fontSize:11,color:'var(--dim)',background:'none',border:'none',cursor:'pointer'}}>✕ Nova consulta</button>
+                  <button onClick={()=>setScreen('precos')} style={{fontSize:11,color:'var(--dim)',background:'none',border:'none',cursor:'pointer'}}>Editar preços ›</button>
                 </div>
               </div>
             )}
           </div>
         )}
 
-        {screen==='os'       && <OSScreen cats={cats}/>}
+        {screen==='os'       && <OSScreen cats={cats} config={config}/>}
         {screen==='caixa'    && <CaixaScreen cats={cats}/>}
         {screen==='clientes' && <ClientesScreen cats={cats} onSelectPlate={p=>{setPlate(cleanP(p));setScreen('consulta');doSearch(p);}}/>}
         {screen==='planos'   && <PlanosScreen/>}
         {screen==='modelos'  && <ModelosScreen cats={cats}/>}
         {screen==='precos'   && <PriceManager cats={cats} onReload={reloadCats}/>}
+        {screen==='config'   && <ConfiguracoesScreen user={user} config={config} onConfigSaved={setConfig}/>}
       </div>
 
       {modal==='manual'&&(
@@ -1309,7 +1719,7 @@ function App() {
         }}/>
       )}
       {modal==='novaOS'&&osData&&(
-        <NovaOSModal data={osData} cats={cats} onClose={()=>setModal(null)} onSaved={()=>{
+        <NovaOSModal data={osData} cats={cats} config={config} onClose={()=>setModal(null)} onSaved={()=>{
           setModal(null); setScreen('os');
           checkinGamificacao().then(r=>{
             if (r?.novo && r.streak>1) {
