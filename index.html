@@ -508,8 +508,11 @@ function BuscaCliente({placa, onSelect}) {
 function NovaOSModal({data, cats, config, onClose, onSaved}) {
   const cat = data.cat||(data.categoria_id&&cats[data.categoria_id]);
   const [step,       setStep]       = useState(1);
-  const [servico,    setServico]    = useState('simples');
-  const [valor,      setValor]      = useState(cat?.preco||0);
+  const [servicosDisp, setServicosDisp] = useState([]);
+  const [precosMatriz, setPrecosMatriz] = useState({});
+  const [loadingServ,  setLoadingServ]  = useState(true);
+  const [servico,    setServico]    = useState('');
+  const [valor,      setValor]      = useState(0);
   const [obs,        setObs]        = useState('');
   const [clienteSel, setClienteSel] = useState(null);
   const [nomeNovo,   setNomeNovo]   = useState('');
@@ -518,17 +521,38 @@ function NovaOSModal({data, cats, config, onClose, onSaved}) {
   const [assinatura, setAssinatura] = useState(null);
   const [loadingAssin, setLoadingAssin] = useState(false);
   const [usarPlano,  setUsarPlano]  = useState(false);
-  useEffect(()=>{ const base=cat?.preco||0; const mult=SERVICOS.find(s=>s.id===servico)?.mult||1; setValor(Math.round(base*mult)); },[servico,cat]);
 
-  // Zera o valor se for usar lavagem do plano
+  // Carrega serviços e matriz de preços do usuário
   useEffect(()=>{
-    if (usarPlano && assinatura?.plano) {
-      setValor(0);
-    } else if (!usarPlano && cat) {
-      const mult = SERVICOS.find(s=>s.id===servico)?.mult||1;
-      setValor(Math.round((cat.preco||0)*mult));
-    }
-  },[usarPlano]);
+    (async()=>{
+      try {
+        const { data:{session} } = await supabase.auth.getSession();
+        const auth = { Authorization:'Bearer '+session.access_token };
+        const [rs, rp] = await Promise.all([
+          fetch('/api/servicos', {headers:auth}),
+          fetch('/api/servicos?action=precos', {headers:auth}),
+        ]);
+        const svs = await rs.json();
+        const prs = await rp.json();
+        const lista = Array.isArray(svs) ? svs : [];
+        setServicosDisp(lista);
+        const map = {};
+        if (Array.isArray(prs)) prs.forEach(p=>{ map[p.categoria_id+'|'+p.servico_id] = p.valor; });
+        setPrecosMatriz(map);
+        if (lista.length>0) setServico(lista[0].id);
+      } catch(e){console.error(e);}
+      finally{setLoadingServ(false);}
+    })();
+  },[]);
+
+  // Atualiza valor com base na matriz categoria+servico
+  useEffect(()=>{
+    if (usarPlano && assinatura?.plano) { setValor(0); return; }
+    if (!cat || !servico) return;
+    const key = cat.id+'|'+servico;
+    const valorMatriz = precosMatriz[key];
+    setValor(valorMatriz!=null ? valorMatriz : (cat.preco||0));
+  },[servico, cat, precosMatriz, usarPlano]);
   async function handleSel(c){
     setClienteSel(c); setNomeNovo(c.nome||''); setTelNovo(c.telefone||'');
     setLoadingAssin(true);
@@ -560,7 +584,7 @@ function NovaOSModal({data, cats, config, onClose, onSaved}) {
       onSaved();
     } catch(e){console.error(e);} finally{setSaving(false);}
   }
-  const sv=SERVICOS.find(s=>s.id===servico);
+  const sv=servicosDisp.find(s=>s.id===servico)||{nome:'',emoji:'💧'};
   return (
     <div className="overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="up" style={{width:'100%',maxWidth:480,background:'var(--s1)',border:'1px solid var(--bdr)',borderRadius:20,padding:24,maxHeight:'92vh',overflowY:'auto'}}>
@@ -1496,7 +1520,199 @@ function ConfiguracoesScreen({user, config, onConfigSaved}) {
   );
 }
 
-const MAIS_IDS = ['clientes','planos','modelos','precos','config'];
+
+/* ─── SERVICOS SCREEN (matriz categoria x servico) ───────── */
+function ServicosScreen({cats}) {
+  const [servicos,    setServicos]    = useState([]);
+  const [precos,      setPrecos]      = useState({}); // key: "catId|servId" -> valor
+  const [loading,     setLoading]     = useState(true);
+  const [showForm,    setShowForm]    = useState(false);
+  const [editandoServ,setEditandoServ]= useState(null);
+  const [saving,      setSaving]      = useState({});
+  const [saved,       setSaved]       = useState({});
+
+  useEffect(()=>{ load(); },[]);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const { data:{session} } = await supabase.auth.getSession();
+      const auth = { Authorization:'Bearer '+session.access_token };
+
+      const [rs, rp] = await Promise.all([
+        fetch('/api/servicos', {headers:auth}),
+        fetch('/api/servicos?action=precos', {headers:auth}),
+      ]);
+      const svs = await rs.json();
+      const prs = await rp.json();
+
+      setServicos(Array.isArray(svs)?svs:[]);
+      const map = {};
+      if (Array.isArray(prs)) prs.forEach(p=>{ map[p.categoria_id+'|'+p.servico_id] = p.valor; });
+      setPrecos(map);
+    } catch(e){console.error(e);}
+    finally{setLoading(false);}
+  }
+
+  async function salvarPreco(catId, servId, valor) {
+    const key = catId+'|'+servId;
+    setPrecos(p=>({...p,[key]:valor}));
+    setSaving(s=>({...s,[key]:true}));
+    try {
+      const { data:{session} } = await supabase.auth.getSession();
+      await fetch('/api/servicos?action=preco', {
+        method:'POST',
+        headers:{'Content-Type':'application/json', Authorization:'Bearer '+session.access_token},
+        body: JSON.stringify({ categoria_id:catId, servico_id:servId, valor }),
+      });
+      setSaved(s=>({...s,[key]:true}));
+      setTimeout(()=>setSaved(s=>({...s,[key]:false})), 1500);
+    } catch(e){console.error(e);}
+    finally{setSaving(s=>({...s,[key]:false}));}
+  }
+
+  async function deletarServico(id) {
+    if (!confirm('Remover este tipo de serviço?')) return;
+    try {
+      const { data:{session} } = await supabase.auth.getSession();
+      await fetch('/api/servicos?id='+id, { method:'DELETE', headers:{Authorization:'Bearer '+session.access_token} });
+      setServicos(s=>s.filter(x=>x.id!==id));
+    } catch(e){console.error(e);}
+  }
+
+  const catList = Object.values(cats);
+
+  return (
+    <div style={{padding:'14px 16px 88px',maxWidth:640,margin:'0 auto'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+        <div>
+          <div style={{fontFamily:'Bebas Neue,cursive',fontSize:28,color:'var(--neon)',letterSpacing:'.05em'}}>TIPOS DE SERVIÇO</div>
+          <div style={{fontSize:12,color:'var(--dim)',marginTop:2}}>Defina o preço de cada serviço por categoria</div>
+        </div>
+        <button onClick={()=>{setEditandoServ(null);setShowForm(true);}} style={{padding:'8px 14px',borderRadius:9,fontSize:12,fontWeight:700,cursor:'pointer',background:'linear-gradient(135deg,rgba(0,229,255,.18),rgba(0,229,255,.08))',border:'1px solid rgba(0,229,255,.4)',color:'var(--neon)',flexShrink:0}}>+ Novo</button>
+      </div>
+
+      {loading&&<div style={{textAlign:'center',padding:'32px',color:'var(--dim)'}}>Carregando…</div>}
+
+      {/* Lista de serviços com botão excluir */}
+      {!loading&&(
+        <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:20}}>
+          {servicos.map(s=>(
+            <div key={s.id} style={{display:'flex',alignItems:'center',gap:10,background:'var(--s1)',border:'1px solid var(--bdr)',borderRadius:11,padding:'10px 14px'}}>
+              <span style={{fontSize:22}}>{s.emoji}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:600,color:'var(--txt)'}}>{s.nome}</div>
+                {s.descricao&&<div style={{fontSize:11,color:'var(--dim)'}}>{s.descricao}</div>}
+              </div>
+              <button onClick={()=>deletarServico(s.id)} style={{padding:'6px 10px',borderRadius:7,fontSize:11,cursor:'pointer',background:'rgba(244,67,54,.07)',border:'1px solid rgba(244,67,54,.2)',color:'#f44336',flexShrink:0}}>🗑</button>
+            </div>
+          ))}
+          {servicos.length===0&&(
+            <div style={{textAlign:'center',padding:'32px 0'}}>
+              <div style={{fontSize:36,opacity:.2,marginBottom:8}}>🧴</div>
+              <div style={{fontSize:13,color:'var(--dim)'}}>Nenhum serviço cadastrado</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Matriz de preços */}
+      {!loading&&servicos.length>0&&catList.length>0&&(
+        <div>
+          <div style={{fontSize:12,fontWeight:700,color:'var(--txt)',marginBottom:10,textTransform:'uppercase',letterSpacing:'.05em'}}>Preços por categoria</div>
+          <div style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
+            <div style={{minWidth:Math.max(380, 90+servicos.length*100)}}>
+              {/* Header */}
+              <div style={{display:'flex',gap:6,marginBottom:8,paddingLeft:90}}>
+                {servicos.map(s=>(
+                  <div key={s.id} style={{width:96,flexShrink:0,textAlign:'center',fontSize:11,fontWeight:700,color:'var(--dim)'}}>
+                    <div style={{fontSize:16}}>{s.emoji}</div>
+                    <div>{s.nome}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Linhas por categoria */}
+              {catList.map(cat=>(
+                <div key={cat.id} style={{display:'flex',gap:6,alignItems:'center',marginBottom:6}}>
+                  <div style={{width:90,flexShrink:0,display:'flex',alignItems:'center',gap:5}}>
+                    <span style={{fontSize:16}}>{cat.emoji}</span>
+                    <span style={{fontSize:11,color:cat.color,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{cat.label}</span>
+                  </div>
+                  {servicos.map(s=>{
+                    const key = cat.id+'|'+s.id;
+                    const val = precos[key] ?? '';
+                    return (
+                      <div key={s.id} style={{width:96,flexShrink:0,position:'relative'}}>
+                        <input type="number" min="0" step="5" value={val}
+                          onChange={e=>setPrecos(p=>({...p,[key]:e.target.value}))}
+                          onBlur={e=>salvarPreco(cat.id, s.id, Number(e.target.value)||0)}
+                          placeholder="—"
+                          style={{width:'100%',background:'var(--s2)',border:`1px solid ${saved[key]?'rgba(76,175,80,.5)':'rgba(255,255,255,.1)'}`,borderRadius:7,padding:'7px 6px',fontSize:12,fontFamily:'JetBrains Mono,monospace',fontWeight:700,color:saved[key]?'#4caf50':'var(--acid)',textAlign:'center',outline:'none'}}/>
+                        {saving[key]&&<span style={{position:'absolute',top:-4,right:-4,width:10,height:10,border:'2px solid var(--neon)',borderTopColor:'transparent',borderRadius:'50%',display:'inline-block',animation:'spin .9s linear infinite'}}/>}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{fontSize:11,color:'var(--dim)',marginTop:10}}>💡 Toque em uma célula vazia para definir o preço. Sai do campo para salvar automaticamente.</div>
+        </div>
+      )}
+
+      {showForm&&(
+        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowForm(false)}>
+          <ServicoFormModal inicial={editandoServ} onClose={()=>setShowForm(false)} onSaved={()=>{setShowForm(false);load();}}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ServicoFormModal({inicial, onClose, onSaved}) {
+  const [form, setForm] = useState({ nome:inicial?.nome||'', emoji:inicial?.emoji||'💧', descricao:inicial?.descricao||'', ordem:inicial?.ordem||99 });
+  const [saving, setSaving] = useState(false);
+  const sf = (k,v) => setForm(f=>({...f,[k]:v}));
+  const EMOJIS_SERV = ['💧','✨','💎','🧹','🪣','🚿','🧽','🛁','⭐','🔥'];
+
+  async function salvar() {
+    if (!form.nome) return;
+    setSaving(true);
+    try {
+      const { data:{session} } = await supabase.auth.getSession();
+      await fetch('/api/servicos', {
+        method:'POST',
+        headers:{'Content-Type':'application/json', Authorization:'Bearer '+session.access_token},
+        body: JSON.stringify({ id:inicial?.id, ...form }),
+      });
+      onSaved();
+    } catch(e){console.error(e);}
+    finally{setSaving(false);}
+  }
+
+  return (
+    <div className="up" onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:420,background:'var(--s1)',border:'1px solid var(--bdr)',borderRadius:20,padding:24,maxHeight:'88vh',overflowY:'auto'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:18}}>
+        <div style={{fontFamily:'Bebas Neue,cursive',fontSize:22,color:'var(--neon)'}}>{inicial?'EDITAR':'NOVO'} SERVIÇO</div>
+        <button onClick={onClose} style={{padding:8,borderRadius:8,background:'rgba(255,255,255,.05)',border:'none',cursor:'pointer',color:'var(--dim)',fontSize:18}}>✕</button>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',gap:13}}>
+        <div><label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:5,textTransform:'uppercase'}}>Nome *</label><input type="text" value={form.nome} onChange={e=>sf('nome',e.target.value)} placeholder="Ex: Encerramento" className="fi"/></div>
+        <div><label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:8,textTransform:'uppercase'}}>Emoji</label>
+          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+            {EMOJIS_SERV.map(e=>(<button key={e} onClick={()=>sf('emoji',e)} style={{width:34,height:34,borderRadius:8,fontSize:18,cursor:'pointer',background:form.emoji===e?'rgba(0,229,255,.18)':'rgba(255,255,255,.05)',border:`2px solid ${form.emoji===e?'var(--neon)':'rgba(255,255,255,.08)'}`}}>{e}</button>))}
+          </div>
+        </div>
+        <div><label style={{fontSize:11,color:'var(--dim)',fontWeight:600,display:'block',marginBottom:5,textTransform:'uppercase'}}>Descrição</label><input type="text" value={form.descricao} onChange={e=>sf('descricao',e.target.value)} placeholder="Ex: Encerramento de pintura" className="fi"/></div>
+      </div>
+      <button onClick={salvar} disabled={saving||!form.nome} style={{width:'100%',marginTop:20,padding:13,borderRadius:12,fontWeight:700,fontSize:14,cursor:!form.nome?'not-allowed':'pointer',opacity:!form.nome?.4:1,background:'linear-gradient(135deg,rgba(0,229,255,.18),rgba(0,229,255,.08))',border:'1px solid rgba(0,229,255,.4)',color:'var(--neon)'}}>
+        {saving?'Salvando…':'✓ Salvar'}
+      </button>
+    </div>
+  );
+}
+
+const MAIS_IDS = ['clientes','planos','servicos','modelos','precos','config'];
 
 function App() {
   const [user,        setUser]        = useState(null);
@@ -1596,7 +1812,7 @@ function App() {
       )}
       {mostrarMais&&(
         <div style={{position:'absolute',top:54,right:8,zIndex:50,background:'var(--s1)',border:'1px solid var(--bdr)',borderRadius:12,overflow:'hidden',boxShadow:'0 8px 24px rgba(0,0,0,.5)',minWidth:180}}>
-          {[['clientes','🗂️','Clientes'],['planos','📋','Planos'],['modelos','🏷️','Modelos'],['precos','💰','Preços'],['config','⚙️','Configurações']].map(([id,ic,lb])=>(
+          {[['clientes','🗂️','Clientes'],['planos','📋','Planos'],['servicos','🧴','Serviços'],['modelos','🏷️','Modelos'],['precos','💰','Preços'],['config','⚙️','Configurações']].map(([id,ic,lb])=>(
             <button key={id} onClick={()=>{setScreen(id);setMostrarMais(false);}}
               style={{width:'100%',display:'flex',alignItems:'center',gap:10,padding:'12px 16px',background:screen===id?'rgba(0,229,255,.08)':'transparent',border:'none',borderBottom:'1px solid rgba(255,255,255,.05)',color:screen===id?'var(--neon)':'var(--txt)',cursor:'pointer',fontSize:13,textAlign:'left'}}>
               <span style={{fontSize:16}}>{ic}</span>{lb}
@@ -1705,6 +1921,7 @@ function App() {
         {screen==='caixa'    && <CaixaScreen cats={cats}/>}
         {screen==='clientes' && <ClientesScreen cats={cats} onSelectPlate={p=>{setPlate(cleanP(p));setScreen('consulta');doSearch(p);}}/>}
         {screen==='planos'   && <PlanosScreen/>}
+        {screen==='servicos' && <ServicosScreen cats={cats}/>}
         {screen==='modelos'  && <ModelosScreen cats={cats}/>}
         {screen==='precos'   && <PriceManager cats={cats} onReload={reloadCats}/>}
         {screen==='config'   && <ConfiguracoesScreen user={user} config={config} onConfigSaved={setConfig}/>}
