@@ -1339,6 +1339,8 @@ function CatRowEdit({cat, saving, deleting, onEdit, onSavePreco, onDelete}) {
   );
 }
 
+const EMOJIS = ['🚗','🚐','🛻','🚛','🚌','🏍️','🚜','🚕','🏎️','🚙','🚑','🚒','🚐','⛟','🚚','🏗️','🚤','🛵','🛺','🚃'];
+
 function CatFormModal({inicial, saving, onClose, onSave, idsExistentes}) {
   const isEdit=!!inicial;
   const [form,setForm]=useState(inicial||{id:'',label:'',emoji:'🚗',descricao:'',cor:'#00e5ff',preco:0,ordem:99});
